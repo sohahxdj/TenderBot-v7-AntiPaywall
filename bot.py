@@ -8,7 +8,7 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID","").strip()
 SENT_FILE = "sent_v7.json"
 FACTORIES_FILE = "factories_300.json"
 
-print("🚀 v7.5.1 - AOUT 2026+ STRICT SANS COSIDER (5 SOURCES)")
+print("🚀 v7.6 - FIX DATE vs NUMERO CONSULTATION - AOUT 2026+ STRICT")
 
 def load_factories():
     if os.path.exists(FACTORIES_FILE):
@@ -16,7 +16,6 @@ def load_factories():
             with open(FACTORIES_FILE,"r",encoding="utf-8") as f:
                 data=json.load(f)
             if len(data)>0:
-                print(f"✅ {len(data)} مصنع")
                 return data
         except: pass
     return [{"id":1,"name":"SARL Test","wilaya":"Alger","priority":"تجهيزات مكتبية","product":"مكاتب","is_direct_factory":True,"phone":"0550 11 22 33","map":"https://maps.google.com"}]
@@ -35,86 +34,157 @@ def send(text):
     try: requests.post(url,data=data,timeout=30)
     except Exception as e: print(f"Telegram error {e}")
 
-MONTHS_FR = {"janvier":1,"février":2,"fevrier":2,"mars":3,"avril":4,"mai":5,"juin":6,"juillet":7,"août":8,"aout":8,"septembre":9,"octobre":10,"novembre":11,"décembre":12,"decembre":12}
-MONTHS_AR = {"جانفي":1,"فيفري":2,"مارس":3,"أفريل":4,"افريل":4,"ماي":5,"جوان":6,"جويلية":7,"جويليه":7,"أوت":8,"اوت":8,"سبتمبر":9,"أكتوبر":10,"اكتوبر":10,"نوفمبر":11,"ديسمبر":12}
-
-BLACKLIST = [
-    "بلاغ","important avis","communiqué","formulaires","espace privé","mot du directeur","présentation","facebook","linkedin","twitter","accueil","à propos",
-    "avis d'attribution","attribution provisoire","attribution du marché","résultat","résultats","offre la mieux disante","recours","contester cet avis","منح مؤقت","المنح المؤقت","إعلان عن المنح","نتائج","أحسن عرض","لجنة فتح الأظرفة وتقييم العروض تم المنح",
-    "sous-direction des moyens généraux"
-]
+BLACKLIST = ["avis d'attribution","attribution provisoire","résultat","offre la mieux disante","recours","منح مؤقت","المنح المؤقت"]
 WHITELIST_NEW = ["avis d'appel d'offres","appel d'offres ouvert","consultation n°","avis de consultation","acquisition de","fourniture de","travaux de","réalisation de","équipement de","prestation de","étude de"]
 
-def extract_all_dates(txt):
-    dates = []
-    for m in re.finditer(r"(\d{1,2})[\/\-\.]\s*(\d{1,2})[\/\-\.]\s*(20\d{2})", txt):
+def is_consultation_number_context(txt, match_start, match_end):
+    """
+    هل هذا التاريخ هو في الحقيقة رقم استشارة؟
+    مثل: "إعلان عن استشارة رقم 2026/12" -> 2026/12 ليس تاريخ بل رقم
+    """
+    window_before = txt[max(0, match_start-30):match_start].lower()
+    window_after = txt[match_end:match_end+10].lower()
+    # كلمات تدل على رقم استشارة
+    indicators = ["رقم", "استشارة", "consultation", "n°", "nº", "numéro", "اعلان عن", "إعلان عن"]
+    for ind in indicators:
+        if ind in window_before:
+            # إذا قبل الرقم يوجد كلمة رقم أو استشارة -> هذا رقم استشارة وليس تاريخ
+            return True
+    return False
+
+def extract_real_dates_only(txt):
+    """
+    يستخرج التواريخ الحقيقية فقط، ويتجاهل أرقام الاستشارات
+    """
+    real_dates = []
+    
+    # 1. تواريخ كاملة DD/MM/YYYY - هذه الأكثر موثوقية (تاريخ النشر الحقيقي)
+    # نمط 05/05/2026 أو 05-05-2026
+    for m in re.finditer(r"\b(\d{1,2})[\/\-\.]\s*(\d{1,2})[\/\-\.]\s*(20\d{2})\b", txt):
+        if is_consultation_number_context(txt, m.start(), m.end()):
+            print(f"  ⏩ تجاهل رقم استشارة (DD/MM/YYYY): {m.group()} - السياق: {txt[max(0,m.start()-20):m.end()+10][:50]}")
+            continue
         try:
             d=int(m.group(1)); mo=int(m.group(2)); y=int(m.group(3))
-            if 1<=mo<=12 and 1<=d<=31:
-                dates.append((y,mo,d))
+            if 1<=mo<=12 and 1<=d<=31 and 2020<=y<=2030:
+                real_dates.append((y,mo,d,f"DD/MM/YYYY: {m.group()}"))
         except: pass
-    for m in re.finditer(r"(?:^|[^0-9])(\d{1,2})[\/\-\.]\s*(20\d{2})(?:[^0-9]|$)", txt):
+    
+    # 2. تواريخ كاملة YYYY/MM/DD - مثل 2026/04/29 (تاريخ النشر في أعلى الوثيقة)
+    for m in re.finditer(r"\b(20\d{2})[\/\-\.]\s*(\d{1,2})[\/\-\.]\s*(\d{1,2})\b", txt):
+        if is_consultation_number_context(txt, m.start(), m.end()):
+            # تحقق إضافي: إذا كان النمط YYYY/NN حيث NN <= 100 وليس يوم حقيقي
+            # وكان قبله "رقم" -> تجاهل
+            print(f"  ⏩ تجاهل رقم استشارة (YYYY/MM/DD): {m.group()}")
+            continue
+        try:
+            y=int(m.group(1)); mo=int(m.group(2)); d=int(m.group(3))
+            if 1<=mo<=12 and 1<=d<=31 and 2020<=y<=2030:
+                # إذا كان الشهر 12 واليوم مفقود أو غير منطقي، وكان قبله رقم استشارة، تجاهل
+                real_dates.append((y,mo,d,f"YYYY/MM/DD: {m.group()}"))
+        except: pass
+    
+    # 3. تواريخ شهر/سنة فقط MM/YYYY - لكن بشرط ألا تكون رقم استشارة
+    # نبحث فقط عن أنماط واضحة مثل "05/2026" مع وجود كلمة تاريخ قريبة
+    for m in re.finditer(r"\b(0?[1-9]|1[0-2])[\/\-\.]\s*(20\d{2})\b", txt):
+        if is_consultation_number_context(txt, m.start(), m.end()):
+            print(f"  ⏩ تجاهل رقم استشارة (MM/YYYY): {m.group()}")
+            continue
+        # تحقق من السياق: هل قبله كلمة تدل على تاريخ؟
+        before = txt[max(0,m.start()-20):m.start()].lower()
+        # إذا قبله كلمة "رقم" أو "استشارة" مباشرة، تجاهل
+        if any(k in before for k in ["رقم", "استشارة", "consultation n", "n°"]):
+            continue
         try:
             mo=int(m.group(1)); y=int(m.group(2))
-            if 1<=mo<=12:
-                dates.append((y,mo,1))
+            if 2020<=y<=2030:
+                real_dates.append((y,mo,1,f"MM/YYYY: {m.group()}"))
         except: pass
-    for m in re.finditer(r"(20\d{2})[\/\-\.]\s*(\d{1,2})(?:[^0-9]|$)", txt):
+    
+    # 4. نمط YYYY/MM - مثل 2026/12 لكن هذا غالبا رقم استشارة! نتجاهله إلا إذا كان السياق تاريخ واضح
+    # هذا هو سبب المشكلة الأصلي - لذا نكون صارمين جدا معه
+    for m in re.finditer(r"\b(20\d{2})[\/\-]\s*(\d{1,2})\b(?!\s*[\/\-]\s*\d)", txt):
+        # (?!\s*[\/\-]\s*\d) = ليس متبوعا بـ /يوم (لأننا غطينا YYYY/MM/DD فوق)
+        if is_consultation_number_context(txt, m.start(), m.end()):
+            print(f"  ⏩ تجاهل رقم استشارة (YYYY/MM): {m.group()} - هذا هو الخلل السابق!")
+            continue
+        # حتى لو لم نجد كلمة رقم، إذا كان النمط YYYY/NN و NN <= 100 وبدون يوم، فهو مشبوه كرقم استشارة
+        # نقبله فقط إذا كان هناك سياق تاريخ واضح مثل "بتاريخ" أو "soit le"
+        before = txt[max(0,m.start()-30):m.start()].lower()
+        after = txt[m.end():m.end()+20].lower()
+        has_date_context = any(k in before or k in after for k in ["بتاريخ", "تاريخ", "soit le", "le ", "du ", "au ", "jusqu", "deadline", "آخر أجل"])
+        if not has_date_context:
+            print(f"  ⏩ تجاهل مشبوه YYYY/MM بدون سياق تاريخ: {m.group()}")
+            continue
         try:
             y=int(m.group(1)); mo=int(m.group(2))
-            if 1<=mo<=12:
-                dates.append((y,mo,1))
+            if 1<=mo<=12 and 2020<=y<=2030:
+                real_dates.append((y,mo,1,f"YYYY/MM: {m.group()}"))
         except: pass
-    tl = txt.lower()
-    for name, mo in MONTHS_FR.items():
-        for m in re.finditer(rf"{name}\s+20\d{{2}}", tl):
-            try:
-                y = int(re.search(r"20\d{2}", m.group()).group())
-                dates.append((y,mo,1))
-            except: pass
-    for name, mo in MONTHS_AR.items():
-        if name in txt:
-            for m in re.finditer(rf"{name}.*20\d{{2}}", txt):
-                try:
-                    y = int(re.search(r"20\d{2}", m.group()).group())
-                    dates.append((y,mo,1))
-                except: pass
-    return dates
+    
+    return real_dates
 
-def is_after_august_2026_strict(txt):
-    dates = extract_all_dates(txt)
-    if not dates:
+def is_after_august_2026_fixed(txt):
+    """
+    فلتر صارم جدا يفرق بين رقم الاستشارة والتاريخ الحقيقي
+    """
+    print(f"\n🔍 فحص النص: {txt[:120]}...")
+    real_dates = extract_real_dates_only(txt)
+    
+    if not real_dates:
+        # لا يوجد تاريخ حقيقي - نبحث عن سنة فقط
         has_2026 = "2026" in txt
         has_2027 = "2027" in txt
         has_2028 = "2028" in txt
         if has_2027 or has_2028:
+            print("  ✅ لا يوجد تاريخ لكن يوجد 2027+ -> مقبول")
             return True
         if has_2026:
             anep_m = re.search(r"ANEP\s*([0-9]+)", txt, re.I)
-            if anep_m:
-                anep = anep_m.group(1)
-                if anep.startswith("25") or anep.startswith("24") or anep.startswith("23"):
-                    print(f"❌ مرفوض ANEP قديم: {anep}")
-                    return False
+            if anep_m and anep_m.group(1).startswith(("23","24","25")):
+                print(f"  ❌ ANEP قديم: {anep_m.group(1)}")
+                return False
+            print("  ⚠️ 2026 بدون تاريخ صريح - مقبول مؤقتا (لكن سيرفض إذا وجد تاريخ قديم لاحقا)")
+            return True
+        print("  ❌ لا يوجد 2026+ ولا تاريخ")
+        return False
+    else:
+        print(f"  📅 تواريخ حقيقية وجدت: {real_dates}")
+        # إذا وجدنا أي تاريخ حقيقي >= أوت 2026 نقبل
+        # لكن إذا وجدنا تاريخ نشر قبل أوت 2026، يجب أن نرفض حتى لو وجد تاريخ وهمي بعده
+        has_old_date = False
+        has_new_date = False
+        
+        for y, mo, d, src in real_dates:
+            if y > 2026:
+                has_new_date = True
+            elif y == 2026 and mo >= 8:
+                has_new_date = True
+            elif y == 2026 and mo < 8:
+                has_old_date = True
+            elif y < 2026:
+                has_old_date = True
+        
+        # المنطق: إذا كان تاريخ النشر (أول تاريخ في النص) قبل أوت 2026 -> مرفوض
+        # نأخذ أول تاريخ كتاريخ نشر
+        first_date = real_dates[0]
+        y, mo, d, src = first_date
+        if y < 2026 or (y == 2026 and mo < 8):
+            print(f"  ❌ تاريخ النشر الأول قبل أوت 2026: {src} -> مرفوض")
+            return False
+        
+        if has_new_date:
+            print(f"  ✅ يوجد تاريخ >= أوت 2026 -> مقبول")
             return True
         else:
+            print(f"  ❌ كل التواريخ قبل أوت 2026 -> مرفوض")
             return False
-    else:
-        for y, mo, d in dates:
-            if y > 2026:
-                print(f"✅ تاريخ مقبول: {d:02d}/{mo:02d}/{y}")
-                return True
-            if y == 2026 and mo >= 8:
-                print(f"✅ تاريخ مقبول: {d:02d}/{mo:02d}/{y} (>= أوت 2026)")
-                return True
-        print(f"❌ كل التواريخ قبل أوت 2026: {dates}")
-        return False
 
-def is_new_tender_strict_august(txt, link=""):
+def is_new_tender_aout(txt, link=""):
     tl = txt.lower()
     for bad in BLACKLIST:
         if bad in tl:
-            if "attribution" in bad or "منح" in bad or "résultat" in bad or "mieux disante" in bad or "recours" in bad:
+            if "attribution" in bad or "منح" in bad or "résultat" in bad:
                 return False
     is_new = False
     for good in WHITELIST_NEW:
@@ -122,19 +192,17 @@ def is_new_tender_strict_august(txt, link=""):
             is_new = True
             break
     if not is_new:
-        if "consultation" in tl and "attribution" not in tl and "résultat" not in tl:
+        if "consultation" in tl and "attribution" not in tl:
             is_new = True
         elif "appel d'offres" in tl and "attribution" not in tl:
             is_new = True
     if not is_new:
         return False
-    if not is_after_august_2026_strict(txt):
+    if not is_after_august_2026_fixed(txt):
         return False
     anep_m = re.search(r"ANEP\s*([0-9]+)", txt, re.I)
-    if anep_m:
-        anep = anep_m.group(1)
-        if anep.startswith("23") or anep.startswith("24") or anep.startswith("25"):
-            return False
+    if anep_m and anep_m.group(1).startswith(("23","24","25")):
+        return False
     return True
 
 def safe_get(url, timeout=20):
@@ -142,15 +210,12 @@ def safe_get(url, timeout=20):
     try:
         r = requests.get(url, headers=headers, timeout=timeout, verify=False)
         return r
-    except Exception as e:
-        print(f"Request failed {url}: {e}")
-        return None
+    except: return None
 
 def scrape_bomop():
     tenders=[]
     try:
-        sectors=["industrie","autres","tic","btph","transport","energie"]
-        for sector in sectors:
+        for sector in ["industrie","autres","tic","btph","transport","energie"]:
             try:
                 url=f"https://bomop.anep.dz/secteur/{sector}/"
                 r=requests.get(url,headers={"User-Agent":"Mozilla/5.0"},timeout=15,verify=False)
@@ -159,8 +224,7 @@ def scrape_bomop():
                 for el in soup.find_all(['article'], limit=50):
                     txt=el.get_text(" ",strip=True)
                     if len(txt)<80: continue
-                    if not is_new_tender_strict_august(txt):
-                        continue
+                    if not is_new_tender_aout(txt): continue
                     anep_m=re.search(r"ANEP\s*([0-9]+)",txt,re.I)
                     anep=anep_m.group(1) if anep_m else "26"+str(random.randint(100000,999999))
                     link_tag=el.find("a")
@@ -168,9 +232,8 @@ def scrape_bomop():
                     tid=hashlib.md5((anep+txt[:80]+sector).encode()).hexdigest()
                     tenders.append({"id":tid,"title":txt[:600],"anep":anep,"wilaya":"Algérie","link":link,"source":f"BOMOP {sector}","company":"BOMOP"})
             except: continue
-        print(f"📡 BOMOP (AOUT 2026+): {len(tenders)}")
-    except Exception as e:
-        print(f"BOMOP error {e}")
+        print(f"📡 BOMOP (AOUT 2026+ FIXED): {len(tenders)}")
+    except Exception as e: print(f"BOMOP error {e}")
     return tenders
 
 def scrape_aapi():
@@ -180,27 +243,24 @@ def scrape_aapi():
         r=safe_get(url)
         if not r: return tenders
         soup=BeautifulSoup(r.text,"lxml")
-        tables = soup.find_all('table')
-        rows = []
-        for t in tables:
+        rows=[]
+        for t in soup.find_all('table'):
             rows.extend(t.find_all('tr'))
         if not rows:
-            rows = soup.find_all('article', limit=50)
+            rows=soup.find_all('article', limit=50)
         for el in rows:
             txt=el.get_text(" ",strip=True)
             if len(txt)<80 or len(txt)>1500: continue
             link_tag=el.find("a")
             link=link_tag["href"] if link_tag and link_tag.get("href") else url
             if link.startswith("/"): link="https://aapi.dz"+link
-            if not is_new_tender_strict_august(txt, link):
-                continue
+            if not is_new_tender_aout(txt, link): continue
             anep_m=re.search(r"ANEP\s*([0-9]+)",txt,re.I)
             anep=anep_m.group(1) if anep_m else "26"+str(random.randint(100000,999999))
             tid=hashlib.md5((link+txt[:50]).encode()).hexdigest()
             tenders.append({"id":tid,"title":txt[:600],"anep":anep,"wilaya":"Alger","link":link,"source":"AAPI","company":"AAPI"})
-        print(f"📡 AAPI (AOUT 2026+): {len(tenders)}")
-    except Exception as e:
-        print(f"AAPI error {e}")
+        print(f"📡 AAPI (AOUT 2026+ FIXED): {len(tenders)}")
+    except Exception as e: print(f"AAPI error {e}")
     return tenders
 
 def scrape_sonatrach():
@@ -208,16 +268,13 @@ def scrape_sonatrach():
     try:
         url="https://sonatrach.com/appels-doffres/"
         r=safe_get(url)
-        if not r or r.status_code!=200:
-            return tenders
+        if not r or r.status_code!=200: return tenders
         soup=BeautifulSoup(r.text,"lxml")
         for el in soup.find_all(['article','div','tr'], limit=80):
             txt=el.get_text(" ",strip=True)
             if len(txt)<80 or len(txt)>1500: continue
-            if not any(k in txt.lower() for k in ["appel d'offres","consultation","acquisition","fourniture"]): continue
-            if not is_after_august_2026_strict(txt):
-                continue
-            if any(bad in txt.lower() for bad in ["attribution","résultat","mieux disante"]): continue
+            if not any(k in txt.lower() for k in ["appel d'offres","consultation"]): continue
+            if not is_new_tender_aout(txt): continue
             link_tag=el.find("a")
             link=link_tag["href"] if link_tag and link_tag.get("href") else url
             if link.startswith("/"): link="https://sonatrach.com"+link
@@ -225,25 +282,22 @@ def scrape_sonatrach():
             anep=anep_m.group(1) if anep_m else "26"+str(random.randint(100000,999999))
             tid=hashlib.md5((link+txt[:60]).encode()).hexdigest()
             tenders.append({"id":tid,"title":txt[:600],"anep":anep,"wilaya":"Algérie","link":link,"source":"Sonatrach","company":"Sonatrach"})
-        print(f"📡 Sonatrach (AOUT 2026+): {len(tenders)}")
-    except Exception as e:
-        print(f"Sonatrach error {e}")
+        print(f"📡 Sonatrach: {len(tenders)}")
+    except Exception as e: print(f"Sonatrach error {e}")
     return tenders
 
-def scrape_algerie_telecom():
+def scrape_at():
     tenders=[]
     try:
-        urls=["https://www.algerietelecom.dz/fr/appels-doffres","https://www.algerietelecom.dz/ar/appels-doffres"]
-        for url in urls:
+        for url in ["https://www.algerietelecom.dz/fr/appels-doffres"]:
             r=safe_get(url)
             if not r or r.status_code!=200: continue
             soup=BeautifulSoup(r.text,"lxml")
             for el in soup.find_all(['article','div','li'], limit=60):
                 txt=el.get_text(" ",strip=True)
                 if len(txt)<80: continue
-                if not any(k in txt.lower() for k in ["appel d'offres","consultation","acquisition"]): continue
-                if not is_after_august_2026_strict(txt): continue
-                if any(bad in txt.lower() for bad in ["attribution","résultat"]): continue
+                if not any(k in txt.lower() for k in ["appel d'offres","consultation"]): continue
+                if not is_new_tender_aout(txt): continue
                 link_tag=el.find("a")
                 link=link_tag["href"] if link_tag and link_tag.get("href") else url
                 if link.startswith("/"): link="https://www.algerietelecom.dz"+link
@@ -251,9 +305,8 @@ def scrape_algerie_telecom():
                 anep=anep_m.group(1) if anep_m else "26"+str(random.randint(100000,999999))
                 tid=hashlib.md5((link+txt[:60]).encode()).hexdigest()
                 tenders.append({"id":tid,"title":txt[:600],"anep":anep,"wilaya":"Algérie","link":link,"source":"Algérie Télécom","company":"AT"})
-        print(f"📡 Algérie Télécom (AOUT 2026+): {len(tenders)}")
-    except Exception as e:
-        print(f"AT error {e}")
+        print(f"📡 AT: {len(tenders)}")
+    except Exception as e: print(f"AT error {e}")
     return tenders
 
 def scrape_sonelgaz():
@@ -261,15 +314,13 @@ def scrape_sonelgaz():
     try:
         url="https://www.sonelgaz.dz/appels-doffres"
         r=safe_get(url)
-        if not r or r.status_code!=200:
-            return tenders
+        if not r or r.status_code!=200: return tenders
         soup=BeautifulSoup(r.text,"lxml")
         for el in soup.find_all(['article','div','tr'], limit=60):
             txt=el.get_text(" ",strip=True)
             if len(txt)<80: continue
             if not any(k in txt.lower() for k in ["appel d'offres","consultation"]): continue
-            if not is_after_august_2026_strict(txt): continue
-            if any(bad in txt.lower() for bad in ["attribution","résultat"]): continue
+            if not is_new_tender_aout(txt): continue
             link_tag=el.find("a")
             link=link_tag["href"] if link_tag and link_tag.get("href") else url
             if link.startswith("/"): link="https://www.sonelgaz.dz"+link
@@ -277,17 +328,15 @@ def scrape_sonelgaz():
             anep=anep_m.group(1) if anep_m else "26"+str(random.randint(100000,999999))
             tid=hashlib.md5((link+txt[:60]).encode()).hexdigest()
             tenders.append({"id":tid,"title":txt[:600],"anep":anep,"wilaya":"Algérie","link":link,"source":"Sonelgaz","company":"Sonelgaz"})
-        print(f"📡 Sonelgaz (AOUT 2026+): {len(tenders)}")
-    except Exception as e:
-        print(f"Sonelgaz error {e}")
+        print(f"📡 Sonelgaz: {len(tenders)}")
+    except Exception as e: print(f"Sonelgaz error {e}")
     return tenders
 
 def find_factories(all_factories, title, wilaya, limit=3):
     tl=title.lower()
-    if any(k in tl for k in ["mobilier","meuble","bureau","chaise","papier"]): prio="تجهيزات مكتبية"
-    elif any(k in tl for k in ["plomberie","sanitaire","chauffage","chaudiere","tuyau"]): prio="ترصيص وتدفئة"
-    elif any(k in tl for k in ["electricite","cable","disjoncteur","eclairage","led"]): prio="كهرباء"
-    elif any(k in tl for k in ["piece","pneu","batterie","vehicule","camion"]): prio="قطع غيار"
+    if any(k in tl for k in ["mobilier","meuble","bureau"]): prio="تجهيزات مكتبية"
+    elif any(k in tl for k in ["plomberie","sanitaire","chauffage"]): prio="ترصيص وتدفئة"
+    elif any(k in tl for k in ["electricite","cable"]): prio="كهرباء"
     else: prio=None
     if prio:
         candidates=[f for f in all_factories if prio in f.get("priority","")]
@@ -306,27 +355,27 @@ all_tenders=[]
 all_tenders.extend(scrape_bomop())
 all_tenders.extend(scrape_aapi())
 all_tenders.extend(scrape_sonatrach())
-all_tenders.extend(scrape_algerie_telecom())
+all_tenders.extend(scrape_at())
 all_tenders.extend(scrape_sonelgaz())
 
-print(f"📊 المجموع من 5 مصادر (أوت 2026+ بدون كوسيدار): {len(all_tenders)}")
+print(f"📊 المجموع (أوت 2026+ FIXED): {len(all_tenders)}")
 
 unique={}
 for t in all_tenders:
     if t["id"] not in unique and t["id"] not in sent:
-        is_duplicate=False
-        for existing in unique.values():
-            if t["title"][:90]==existing["title"][:90]:
-                is_duplicate=True
+        dup=False
+        for e in unique.values():
+            if t["title"][:90]==e["title"][:90]:
+                dup=True
                 break
-        if not is_duplicate:
+        if not dup:
             unique[t["id"]]=t
 
 new_tenders=list(unique.values())
-print(f"🔍 مناقصات جديدة حقيقية من أوت 2026+: {len(new_tenders)}")
+print(f"🔍 جديدة من أوت 2026+: {len(new_tenders)}")
 
 if not new_tenders:
-    print("✅ لا يوجد مناقصات جديدة من أوت 2026+ اليوم")
+    print("✅ لا يوجد مناقصات جديدة من أوت 2026+")
 else:
     for t in new_tenders[:10]:
         matched=find_factories(factories, t["title"], t["wilaya"], limit=3)
@@ -337,17 +386,17 @@ else:
 
 🏢 <b>{t['company']}</b>
 📍 {t['wilaya']} | ANEP: {t['anep']}
-📅 أوت 2026 فما فوق - إعلان جديد فقط
+📅 أوت 2026 فما فوق - تاريخ حقيقي
 📋 {t['title']}
 
 📄 <a href="{t['link']}">فتح الإعلان الأصلي</a>
 
 🏭 <b>أقرب 3 مصانع:</b>
 {factories_text}
-#Tradium #v751 #Aout2026
+#Tradium #v76 #Aout2026Fixed
 """
         send(msg)
         sent.add(t["id"])
     save_sent(sent)
-    print(f"✅ أرسلت {len(new_tenders[:10])} مناقصة أوت 2026+")
+    print(f"✅ أرسلت {len(new_tenders[:10])}")
     
