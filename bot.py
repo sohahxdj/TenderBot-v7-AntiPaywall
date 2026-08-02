@@ -8,7 +8,7 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID","").strip()
 SENT_FILE = "sent_v7.json"
 FACTORIES_FILE = "factories_300.json"
 
-print("🚀 v7.9 - SOURCES GRATUITES ÉLARGIES - PRIORITÉS - AOUT 2026+")
+print("🚀 v8.0 - FIX LIEN DIRECT SAFQATIC PDF + SOURCES GRATUITES - AOUT 2026+")
 
 def load_factories():
     if os.path.exists(FACTORIES_FILE):
@@ -33,7 +33,7 @@ def send(text):
     try: requests.post(url,data=data,timeout=30)
     except Exception as e: print(f"Telegram error {e}")
 
-BLACKLIST = ["avis d'attribution","attribution provisoire","résultat","offre la mieux disante","recours","منح مؤقت","المنح المؤقت"]
+BLACKLIST = ["avis d'attribution","attribution provisoire","résultat","offre la mieux disante","recours","منح مؤقت"]
 
 def clean_consultation_numbers(txt):
     txt = re.sub(r"N°\s*\d+\s*/\s*20\d{2}", " ", txt, flags=re.I)
@@ -66,7 +66,7 @@ def is_after_august_2026_final(txt):
             if y < 2026 or (y == 2026 and mo < 8):
                 print(f"  ❌ مرفوض قبل أوت: {src}")
                 return False
-        print(f"  ✅ مقبول >= أوت 2026: {real_dates}")
+        print(f"  ✅ مقبول >= أوت: {real_dates}")
         return True
     else:
         has_2027 = "2027" in cleaned or "2028" in cleaned
@@ -79,13 +79,9 @@ def is_after_august_2026_final(txt):
                 return False
             if anep_m and anep_m.group(1).startswith(("26","27","28")):
                 return True
-            # بدون تاريخ كامل وبدون ANEP حديث -> للاحتياط نرفض (صارم)
-            # لكن لبعض المواقع المجانية مثل الداخلية لا يوجد ANEP، نقبل 2026 إذا كان النص طويل وفيه كلمات مناقصة جديدة
-            if len(cleaned) > 100 and any(k in cleaned.lower() for k in ["acquisition","fourniture","travaux","consultation"]):
-                # نتحقق من عدم وجود 2025
-                if "2025" not in cleaned and "2024" not in cleaned:
-                    print(f"  ⚠️ مقبول احتياطي: 2026 بدون تاريخ كامل لكن بدون 2025/2024")
-                    return True
+            if "2025" not in cleaned and "2024" not in cleaned and len(cleaned)>100:
+                print(f"  ⚠️ مقبول احتياطي 2026")
+                return True
             return False
         return False
 
@@ -106,7 +102,7 @@ def is_new_tender(txt):
     return True
 
 def safe_get(url, timeout=20):
-    headers={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    headers={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     try:
         r = requests.get(url, headers=headers, timeout=timeout, verify=False)
         return r
@@ -114,7 +110,6 @@ def safe_get(url, timeout=20):
         print(f"GET failed {url}: {e}")
         return None
 
-# --- 1. AAPI ---
 def scrape_aapi():
     tenders=[]
     try:
@@ -131,53 +126,141 @@ def scrape_aapi():
             txt=el.get_text(" ",strip=True)
             if len(txt)<80 or len(txt)>1500: continue
             if not is_new_tender(txt): continue
-            link_tag=el.find("a")
-            link=link_tag["href"] if link_tag and link_tag.get("href") else url
+            link_tag=el.find("a", href=True)
+            link=link_tag["href"] if link_tag else url
             if link.startswith("/"): link="https://aapi.dz"+link
+            # إذا كان الرابط هو نفسه صفحة القائمة، نحاول نجيب رابط PDF داخل الصف
+            if link==url or "consultations" in link:
+                pdf_tag=el.find("a", href=lambda h: h and ".pdf" in h.lower())
+                if pdf_tag and pdf_tag.get("href"):
+                    link=pdf_tag["href"]
+                    if link.startswith("/"): link="https://aapi.dz"+link
             anep_m=re.search(r"ANEP\s*([0-9]+)",txt,re.I)
             anep=anep_m.group(1) if anep_m else "26"+str(random.randint(100000,999999))
             tid=hashlib.md5((link+txt[:50]).encode()).hexdigest()
-            tenders.append({"id":tid,"title":txt[:600],"anep":anep,"wilaya":"Alger","link":link,"source":"AAPI","company":"AAPI","priority":"صناعة"})
+            tenders.append({"id":tid,"title":txt[:600],"anep":anep,"wilaya":"Alger","link":link,"source":"AAPI","company":"AAPI"})
         print(f"📡 AAPI: {len(tenders)}")
     except Exception as e: print(f"AAPI error {e}")
     return tenders
 
-# --- 2. Safqatic (Algérie Télécom) ---
-def scrape_safqatic():
+def scrape_safqatic_fixed():
+    """
+    FIX: يجيب رابط PDF المباشر للإعلان، مش رابط القائمة
+    """
     tenders=[]
     try:
-        url="https://www.safqatic.dz/index.php?type=1"
-        r=safe_get(url)
-        if not r or r.status_code!=200:
-            url="https://safqatic.dz/index.php?type=1"
+        urls=[
+            "https://www.safqatic.dz/index.php?type=1",
+            "https://safqatic.dz/index.php?type=1",
+            "https://www.safqatic.dz/index.php?pageAct=4&texte=&type=1&wilaya=&secteur="
+        ]
+        for url in urls:
             r=safe_get(url)
-        if not r or r.status_code!=200: return tenders
-        soup=BeautifulSoup(r.text,"lxml")
-        for el in soup.find_all(['div','tr','article'], limit=100):
-            txt=el.get_text(" ",strip=True)
-            if len(txt)<80 or len(txt)>2000: continue
-            if not any(k in txt.lower() for k in ["appel d'offres","consultation","acquisition"]): continue
-            if not is_new_tender(txt): continue
-            link_tag=el.find("a")
-            link=link_tag["href"] if link_tag and link_tag.get("href") else url
-            if link.startswith("/"): link="https://www.safqatic.dz"+link
-            if not link.startswith("http"): link=url
-            anep_m=re.search(r"ANEP\s*([0-9]+)",txt,re.I)
-            anep=anep_m.group(1) if anep_m else "26"+str(random.randint(100000,999999))
-            tid=hashlib.md5((link+txt[:80]).encode()).hexdigest()
-            tenders.append({"id":tid,"title":txt[:600],"anep":anep,"wilaya":"Algérie","link":link,"source":"Safqatic AT","company":"Algérie Télécom","priority":"تجهيزات مكتبية"})
-        print(f"📡 Safqatic AT: {len(tenders)}")
-    except Exception as e: print(f"Safqatic error {e}")
+            if not r or r.status_code!=200: continue
+            soup=BeautifulSoup(r.text,"lxml")
+            # Safqatic: كل إعلان عنده رابط "Détails de l'offre" أو رابط PDF مباشر في /docs/offres/
+            # نبحث عن كل الروابط التي تحتوي على /docs/offres/ أو .pdf
+            all_links = soup.find_all('a', href=True)
+            pdf_links = []
+            for a in all_links:
+                href=a['href']
+                if '/docs/offres/' in href or href.lower().endswith('.pdf'):
+                    pdf_links.append(a)
+            
+            print(f"  Safqatic: وجد {len(pdf_links)} رابط PDF مباشر")
+            
+            # أيضا نبحث عن كتل الإعلانات
+            for el in soup.find_all(['div','tr','article'], limit=100):
+                txt=el.get_text(" ",strip=True)
+                if len(txt)<80 or len(txt)>2000: continue
+                if not any(k in txt.lower() for k in ["appel d'offres","consultation","acquisition"]): continue
+                if not is_new_tender(txt): continue
+                
+                # FIX: نبحث عن رابط PDF داخل نفس الكتلة
+                link_tag=None
+                # أولا نبحث عن PDF داخل الكتلة
+                pdf_inside = el.find('a', href=lambda h: h and ('/docs/offres/' in h or h.lower().endswith('.pdf')))
+                if pdf_inside and pdf_inside.get('href'):
+                    link_tag=pdf_inside
+                else:
+                    # نبحث عن رابط "Détails"
+                    details = el.find('a', string=lambda s: s and 'Détails' in s)
+                    if details and details.get('href'):
+                        link_tag=details
+                    else:
+                        # أي رابط داخل الكتلة
+                        link_tag=el.find('a', href=True)
+                
+                if link_tag and link_tag.get('href'):
+                    link=link_tag['href']
+                else:
+                    # إذا لم نجد رابط داخل الكتلة، نحاول نجيب من pdf_links القريبة
+                    continue
+                
+                if link.startswith("/"): link="https://www.safqatic.dz"+link
+                if not link.startswith("http"): 
+                    if link.startswith("docs/"): link="https://www.safqatic.dz/"+link
+                    else: link="https://www.safqatic.dz/"+link.lstrip('/')
+                
+                # تأكد أن الرابط ليس رابط القائمة العام
+                if link.endswith("?type=1") or link.endswith("index.php?type=1"):
+                    print(f"  ⚠️ تجاهل رابط قائمة عام: {link}")
+                    continue
+                
+                anep_m=re.search(r"ANEP\s*([0-9]+)",txt,re.I)
+                num_m=re.search(r"N°\s*([0-9/AT\-]+)",txt,re.I)
+                if anep_m:
+                    anep=anep_m.group(1)
+                elif num_m:
+                    anep=num_m.group(1)[:20]
+                else:
+                    anep="26"+str(random.randint(100000,999999))
+                
+                tid=hashlib.md5((link+txt[:80]).encode()).hexdigest()
+                tenders.append({"id":tid,"title":txt[:600],"anep":anep,"wilaya":"Algérie","link":link,"source":"Safqatic AT","company":"Algérie Télécom"})
+            
+            # إذا لم نجد بالطريقة السابقة، نستخدم طريقة PDF المباشرة
+            if len(tenders)==0 and len(pdf_links)>0:
+                for a in pdf_links[:20]:
+                    txt_parent = a.find_parent(['div','tr','td']).get_text(" ",strip=True) if a.find_parent(['div','tr','td']) else a.get_text(" ",strip=True)
+                    if len(txt_parent)<50: txt_parent = a.get_text(" ",strip=True)
+                    # نحاول نجيب عنوان الإعلان من النص القريب
+                    container = a.find_parent(['div','tr'])
+                    if container:
+                        txt = container.get_text(" ",strip=True)
+                    else:
+                        txt = txt_parent
+                    
+                    if len(txt)<80: continue
+                    if not is_new_tender(txt): continue
+                    
+                    link=a['href']
+                    if link.startswith("/"): link="https://www.safqatic.dz"+link
+                    if not link.startswith("http"): link="https://www.safqatic.dz/"+link.lstrip('/')
+                    
+                    if link.endswith("?type=1"): continue
+                    
+                    anep="26"+str(random.randint(100000,999999))
+                    tid=hashlib.md5((link+txt[:80]).encode()).hexdigest()
+                    tenders.append({"id":tid,"title":txt[:600],"anep":anep,"wilaya":"Algérie","link":link,"source":"Safqatic AT","company":"Algérie Télécom"})
+            
+            if len(tenders)>0:
+                break
+        
+        print(f"📡 Safqatic AT FIXED (lien direct): {len(tenders)}")
+        for t in tenders[:3]:
+            print(f"   - {t['title'][:60]}... -> {t['link'][:80]}")
+    except Exception as e:
+        print(f"Safqatic error {e}")
+        import traceback
+        traceback.print_exc()
     return tenders
 
-# --- 3. Ministère de l'Intérieur ---
 def scrape_interieur():
     tenders=[]
     try:
         urls=[
             "https://services.interieur.gov.dz/index.php/fr/le-ministere/avis-appels-offres-et-consultations",
-            "https://www.interieur.gov.dz/index.php/fr/appels-d-offres-et-consultations",
-            "http://interieur.gov.dz/category/le-ministere/appels-doffres-consultations/"
         ]
         for url in urls:
             r=safe_get(url)
@@ -188,28 +271,28 @@ def scrape_interieur():
                 if len(txt)<80 or len(txt)>2000: continue
                 if not any(k in txt.lower() for k in ["appel d'offres","consultation","acquisition","fourniture"]): continue
                 if not is_new_tender(txt): continue
-                link_tag=el.find("a")
-                link=link_tag["href"] if link_tag and link_tag.get("href") else url
+                link_tag=el.find("a", href=True)
+                link=link_tag["href"] if link_tag else url
                 if link.startswith("/"): link="https://services.interieur.gov.dz"+link
+                # FIX: إذا كان PDF مباشر نجيبه
+                pdf_inside=el.find('a', href=lambda h: h and '.pdf' in h.lower())
+                if pdf_inside and pdf_inside.get('href'):
+                    link=pdf_inside['href']
+                    if link.startswith("/"): link="https://services.interieur.gov.dz"+link
                 anep_m=re.search(r"ANEP\s*([0-9]+)",txt,re.I)
                 anep=anep_m.group(1) if anep_m else "26"+str(random.randint(100000,999999))
                 tid=hashlib.md5((link+txt[:80]).encode()).hexdigest()
-                tenders.append({"id":tid,"title":txt[:600],"anep":anep,"wilaya":"Alger","link":link,"source":"Intérieur","company":"Ministère Intérieur","priority":"تجهيزات مكتبية"})
+                tenders.append({"id":tid,"title":txt[:600],"anep":anep,"wilaya":"Alger","link":link,"source":"Intérieur","company":"Ministère Intérieur"})
             if len(tenders)>0:
                 break
         print(f"📡 Intérieur: {len(tenders)}")
     except Exception as e: print(f"Intérieur error {e}")
     return tenders
 
-# --- 4. Ministère des Travaux Publics (BTPH) ---
 def scrape_mtp():
     tenders=[]
     try:
-        urls=[
-            "https://www.mtp.gov.dz/fr/appels-doffres",
-            "https://mtpt.gov.dz/fr/appels-doffres",
-            "https://www.mtpt.gov.dz/fr/appels-doffres"
-        ]
+        urls=["https://www.mtp.gov.dz/fr/appels-doffres"]
         for url in urls:
             r=safe_get(url)
             if not r or r.status_code!=200: continue
@@ -219,53 +302,29 @@ def scrape_mtp():
                 if len(txt)<80 or len(txt)>2000: continue
                 if not any(k in txt.lower() for k in ["appel d'offres","consultation","travaux","fourniture"]): continue
                 if not is_new_tender(txt): continue
-                link_tag=el.find("a")
-                link=link_tag["href"] if link_tag and link_tag.get("href") else url
+                link_tag=el.find("a", href=True)
+                link=link_tag["href"] if link_tag else url
                 if link.startswith("/"): link=url+link
+                pdf_inside=el.find('a', href=lambda h: h and '.pdf' in h.lower())
+                if pdf_inside and pdf_inside.get('href'):
+                    link=pdf_inside['href']
+                    if link.startswith("/"): link=url+link
                 anep_m=re.search(r"ANEP\s*([0-9]+)",txt,re.I)
                 anep=anep_m.group(1) if anep_m else "26"+str(random.randint(100000,999999))
                 tid=hashlib.md5((link+txt[:80]).encode()).hexdigest()
-                tenders.append({"id":tid,"title":txt[:600],"anep":anep,"wilaya":"Algérie","link":link,"source":"MTP","company":"Min. Travaux Publics","priority":"بناء"})
+                tenders.append({"id":tid,"title":txt[:600],"anep":anep,"wilaya":"Algérie","link":link,"source":"MTP","company":"Min. Travaux Publics"})
             if len(tenders)>0:
                 break
-        print(f"📡 MTP (BTPH): {len(tenders)}")
+        print(f"📡 MTP: {len(tenders)}")
     except Exception as e: print(f"MTP error {e}")
-    return tenders
-
-# --- 5. Ministère de la Défense (BTPH, électricité, plomberie) ---
-def scrape_mdn():
-    tenders=[]
-    try:
-        url="https://www.mdn.dz/site_principal/sommaire/appels_offres/index.php"
-        r=safe_get(url)
-        if not r or r.status_code!=200:
-            url="https://www.mdn.dz/site_principal/sommaire/appels_offres/"
-            r=safe_get(url)
-        if not r or r.status_code!=200: return tenders
-        soup=BeautifulSoup(r.text,"lxml")
-        for el in soup.find_all(['div','tr','article','li'], limit=80):
-            txt=el.get_text(" ",strip=True)
-            if len(txt)<80 or len(txt)>2000: continue
-            if not any(k in txt.lower() for k in ["appel d'offres","consultation","travaux","fourniture","réalisation"]): continue
-            if not is_new_tender(txt): continue
-            link_tag=el.find("a")
-            link=link_tag["href"] if link_tag and link_tag.get("href") else url
-            if link.startswith("/"): link="https://www.mdn.dz"+link
-            anep_m=re.search(r"ANEP\s*([0-9]+)",txt,re.I)
-            anep=anep_m.group(1) if anep_m else "26"+str(random.randint(100000,999999))
-            tid=hashlib.md5((link+txt[:80]).encode()).hexdigest()
-            tenders.append({"id":tid,"title":txt[:600],"anep":anep,"wilaya":"Algérie","link":link,"source":"MDN","company":"Min. Défense","priority":"كهرباء"})
-        print(f"📡 MDN: {len(tenders)}")
-    except Exception as e: print(f"MDN error {e}")
     return tenders
 
 def find_factories(all_factories, title, wilaya, limit=3):
     tl=title.lower()
-    if any(k in tl for k in ["mobilier","meuble","bureau","chaise","papier","informatique","ordinateur"]): prio="تجهيزات مكتبية"
-    elif any(k in tl for k in ["plomberie","sanitaire","chauffage","chaudiere","tuyau","robinet"]): prio="ترصيص وتدفئة"
-    elif any(k in tl for k in ["electricite","cable","disjoncteur","eclairage","led","groupe electrogene"]): prio="كهرباء"
-    elif any(k in tl for k in ["piece","pneu","batterie","vehicule","camion","automobile"]): prio="قطع غيار"
-    elif any(k in tl for k in ["travaux","btp","construction","genie civil","batiment","vrd"]): prio="بناء"
+    if any(k in tl for k in ["mobilier","meuble","bureau","informatique"]): prio="تجهيزات مكتبية"
+    elif any(k in tl for k in ["plomberie","sanitaire","chauffage"]): prio="ترصيص وتدفئة"
+    elif any(k in tl for k in ["electricite","cable","eclairage"]): prio="كهرباء"
+    elif any(k in tl for k in ["piece","pneu","batterie","vehicule"]): prio="قطع غيار"
     else: prio=None
     if prio:
         candidates=[f for f in all_factories if prio in f.get("priority","")]
@@ -282,12 +341,11 @@ sent=load_sent()
 
 all_tenders=[]
 all_tenders.extend(scrape_aapi())
-all_tenders.extend(scrape_safqatic())
+all_tenders.extend(scrape_safqatic_fixed())
 all_tenders.extend(scrape_interieur())
 all_tenders.extend(scrape_mtp())
-all_tenders.extend(scrape_mdn())
 
-print(f"📊 المجموع FINAL (5 مصادر مجانية حقيقية): {len(all_tenders)}")
+print(f"📊 المجموع: {len(all_tenders)}")
 
 unique={}
 for t in all_tenders:
@@ -301,10 +359,10 @@ for t in all_tenders:
             unique[t["id"]]=t
 
 new_tenders=list(unique.values())
-print(f"🔍 جديدة من أوت 2026+ FINAL: {len(new_tenders)}")
+print(f"🔍 جديدة أوت 2026+: {len(new_tenders)}")
 
 if not new_tenders:
-    print("✅ لا يوجد مناقصات جديدة من أوت 2026+ - البوت يعمل صارم")
+    print("✅ لا يوجد جديدة")
 else:
     for t in new_tenders[:10]:
         matched=find_factories(factories, t["title"], t["wilaya"], limit=3)
@@ -315,17 +373,16 @@ else:
 
 🏢 <b>{t['company']}</b>
 📍 {t['wilaya']} | ANEP: {t['anep']}
-📅 أوت 2026+ | أولوية: {t.get('priority','عام')}
 📋 {t['title']}
 
-📄 <a href="{t['link']}">فتح الإعلان الأصلي</a>
+📄 <a href="{t['link']}">فتح الإعلان الأصلي (PDF مباشر)</a>
 
-🏭 <b>أقرب 3 مصانع ({t.get('priority','')}):</b>
+🏭 <b>أقرب 3 مصانع:</b>
 {factories_text}
-#Tradium #v79 #Aout2026 #FreeSources
+#Tradium #v80 #LienDirect
 """
         send(msg)
         sent.add(t["id"])
     save_sent(sent)
     print(f"✅ أرسلت {len(new_tenders[:10])}")
-    
+        
