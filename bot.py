@@ -9,13 +9,12 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID","").strip()
 SENT_FILE = "sent_v7.json"
 FACTORIES_FILE = "factories_300.json"
 
-print("🚀 v10 FINAL - احترافي - من 2 أوت 2026 فقط")
+print("🚀 v8.9 STABLE - رجوع للنسخة المستقرة")
 
 def load_factories():
     try:
         with open(FACTORIES_FILE,"r",encoding="utf-8") as f:
-            data=json.load(f)
-            return data if len(data)>0 else []
+            return json.load(f)
     except: return []
 
 def load_sent():
@@ -46,8 +45,7 @@ def gen_id(title, source):
 def gen_anep(title):
     return f"26{abs(hash(title))%900000+100000}"
 
-# === تواريخ شاملة ===
-MONTH_MAP={"جانفي":1,"فيفري":2,"مارس":3,"أفريل":4,"افريل":4,"ماي":5,"جوان":6,"جويلية":7,"أوت":8,"اوت":8,"سبتمبر":9,"أكتوبر":10,"اكتوبر":10,"نوفمبر":11,"ديسمبر":12,"janvier":1,"février":2,"fevrier":2,"avril":4,"juin":6,"juillet":7,"août":8,"aout":8,"septembre":9,"octobre":10,"novembre":11,"décembre":12}
+MONTH_MAP={"جانفي":1,"فيفري":2,"مارس":3,"أفريل":4,"افريل":4,"ماي":5,"جوان":6,"جويلية":7,"أوت":8,"اوت":8,"سبتمبر":9,"أكتوبر":10,"اكتوبر":10,"نوفمبر":11,"ديسمبر":12,"janvier":1,"février":2,"fevrier":2,"avril":4,"juin":6,"juillet":7,"août":8,"aout":8}
 MONTH_PAT="|".join(sorted([re.escape(k) for k in MONTH_MAP], key=len, reverse=True))
 
 def get_mo(name):
@@ -65,26 +63,6 @@ def extract_dates(txt):
         if mo: dates.append((int(m.group(3)),mo,int(m.group(1))))
     return dates
 
-def is_from_2_aout(txt, header_date=None):
-    dates=extract_dates(txt)
-    if header_date: dates.append(header_date)
-    if not dates:
-        # بدون تاريخ، اقبل فقط إذا فيه 2026 وما فيهش 2024/2025
-        return "2026" in txt and "2024" not in txt and "2025" not in txt
-    for y,m,d in dates:
-        if y<2026: return False
-        if y==2026 and m<8: return False
-        if y==2026 and m==8 and d<2: return False
-    return True
-
-def is_real_tender(txt):
-    if len(txt)<50 or len(txt)>800: return False
-    if "طلب العروض" not in txt and "تمديد" not in txt: return False
-    if "رقم" not in txt: return False
-    if not re.search(r"\d{2,4}\s*/\s*2026", txt): return False # يجب أن يحتوي رقم مثل 044/2026
-    if any(k in txt.lower() for k in ["إعذار","فسخ","attribution"]): return False
-    return True
-
 def safe_get(url):
     try: return requests.get(url, headers={"User-Agent":"Mozilla/5.0"}, timeout=20, verify=False)
     except: return None
@@ -97,76 +75,56 @@ def scrape_mdn():
         if not r: return tenders
         soup=BeautifulSoup(r.text,"lxml")
         current_date=None
-        seen=set()
-        for el in soup.find_all(['div','p','li'], limit=500):
+        for el in soup.find_all(['div','p','li'], limit=300):
             txt=el.get_text(" ",strip=True)
             if len(txt)<5: continue
-            # هيدر تاريخ
             if len(txt)<30:
                 d=extract_dates(txt)
-                if d:
-                    current_date=d[0]
-                    continue
-            if not is_real_tender(txt): continue
-            if not is_from_2_aout(txt, current_date): continue
-            if txt[:80] in seen: continue
-            seen.add(txt[:80])
+                if d: current_date=d[0]; continue
+            if len(txt)<60 or len(txt)>800: continue
+            if "طلب العروض" not in txt: continue
+            if "2026" not in txt: continue
+            if current_date:
+                y,m,d=current_date
+                if not (y>=2026 and m>=8 and d>=2): continue
             link=url
             a=el.find('a', href=True)
             if a and a.get('href'):
                 href=a['href']
                 if href.startswith("/"): href="https://www.mdn.dz"+href
-                if not href.startswith("http"): href="https://www.mdn.dz/site_principal/sommaire/appels/"+href.lstrip('/')
-                link=href
-            pdf=el.find('a', href=lambda h: h and '.pdf' in h.lower())
-            if pdf and pdf.get('href'):
-                href=pdf['href']
-                if href.startswith("/"): href="https://www.mdn.dz"+href
                 link=href
             tid=gen_id(txt, "MDN")
-            tenders.append({"id":tid,"title":txt,"anep":gen_anep(txt),"wilaya":"Algérie","link":link,"source":"MDN","company":"وزارة الدفاع"})
-        print(f"📡 MDN: {len(tenders)} مناقصة حقيقية من 2 أوت")
+            if any(t['id']==tid for t in tenders): continue
+            tenders.append({"id":tid,"title":txt[:700],"anep":gen_anep(txt),"wilaya":"Algérie","link":link,"source":"MDN","company":"وزارة الدفاع"})
+        print(f"📡 MDN: {len(tenders)}")
     except Exception as e: print(f"MDN error {e}")
     return tenders
 
 factories=load_factories()
 sent=load_sent()
-print(f"🔒 المرسلة: {len(sent)} | مصانع: {len(factories)} | اليوم {datetime.now().strftime('%d/%m/%Y')}")
+print(f"🔒 المرسلة: {len(sent)} | اليوم {datetime.now().strftime('%d/%m/%Y')}")
 
-all_tenders=scrape_mdn() # نركز على MDN لأنه المصدر الحقيقي حاليا
-
-# إزالة المكرر
+all_tenders=scrape_mdn()
 unique={}
 for t in all_tenders:
     if t["id"] in sent: continue
     unique[t["id"]]=t
 
-new=list(unique.values())
-print(f"📊 الخام: {len(all_tenders)} | جديدة: {len(new)}")
+new=list(unique.values())[:5] # نرسل 5 فقط في المرة لتجنب السبام
+print(f"جديدة: {len(new)}")
 
 if not new:
-    print("✅ لا يوجد جديد - مضاد التكرار يعمل!")
+    print("✅ لا يوجد جديد")
 else:
-    # أرسل كل الجديد مرة واحدة (وليس 15 فقط)
     for t in new:
-        # 3 مصانع مع أرقام
         picks=random.sample(factories, min(3, len(factories))) if factories else []
         fac_txt=""
         for i,f in enumerate(picks,1):
-            fac_txt+=f"{i}. 🏭 <b>{f.get('name','')}</b>\n📦 {f.get('product','')} | 📞 <code>{f.get('phone','')}</code>\n🗺️ <a href=\"{f.get('map','')}\">خريطة</a>\n"
-        msg=f"""🔔 <b>مناقصة جديدة - {t['source']}</b>
-
-🏢 {t['company']} | ANEP: {t['anep']}
+            fac_txt+=f"{i}. 🏭 <b>{f.get('name','')}</b> 📦 {f.get('product','')} 📞 <code>{f.get('phone','')}</code>\n"
+        msg=f"""🔔 <b>مناقصة {t['source']}</b>
 📋 {t['title']}
-
-📄 <a href="{t['link']}">📎 فتح الإعلان الأصلي PDF</a>
-
-🏭 <b>موردين مقترحين:</b>
+📄 <a href="{t['link']}">فتح الإعلان PDF</a>
 {fac_txt}
-#Tradium #v10
 """
-        if send(msg):
-            sent.add(t["id"])
-            print(f"✅ أرسلت: {t['title'][:50]}")
+        if send(msg): sent.add(t["id"])
     save_sent(sent)
-    print(f"💾 حفظ {len(sent)} - لن يكرر أبدا")
