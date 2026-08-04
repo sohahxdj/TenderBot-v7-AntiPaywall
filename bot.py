@@ -1,6 +1,6 @@
 import os, requests, json, re, hashlib, random, urllib3
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
+from datetime import datetime
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -9,7 +9,7 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID","").strip()
 SENT_FILE = "sent_v7.json"
 FACTORIES_FILE = "factories_300.json"
 
-print("🚀 v8.6 DAILY MODE - يجيب فقط مناقصات اليوم - ضد التكرار")
+print("🚀 v8.8 - يفهم كل التواريخ عربي/فرنسي/أرقام")
 
 def load_factories():
     if os.path.exists(FACTORIES_FILE):
@@ -57,21 +57,74 @@ def generate_anep_deterministic(title):
     h = abs(hash(title)) % 900000 + 100000
     return f"26{h}"
 
-# === الفلتر الصارم القديم اللي كان يخدم ===
-def clean_consultation_numbers(txt):
-    txt = re.sub(r"N°\s*\d+\s*/\s*20\d{2}", " ", txt, flags=re.I)
-    txt = re.sub(r"رقم\s*\d+\s*/\s*20\d{2}", " ", txt, flags=re.I)
-    return txt
+# === خريطة شاملة لكل الشهور ===
+MONTH_MAP = {
+    # عربي جزائري
+    "جانفي":1, "فيفري":2, "مارس":3, "أفريل":4, "افريل":4, "ماي":5, "جوان":6, "جويلية":7, "جويليه":7, "أوت":8, "اوت":8, "أوث":8, "اوث":8, "سبتمبر":9, "أكتوبر":10, "اكتوبر":10, "نوفمبر":11, "ديسمبر":12,
+    # عربي فصحى
+    "يناير":1, "فبراير":2, "مارس":3, "أبريل":4, "ابريل":4, "مايو":5, "يونيو":6, "يوليو":7, "أغسطس":8, "اغسطس":8, "غشت":8, "أوت":8, "شتنبر":9, "أكتوبر":10, "نونبر":11, "دجنبر":12,
+    "كانون الثاني":1, "شباط":2, "آذار":3, "نيسان":4, "أيار":5, "حزيران":6, "تموز":7, "آب":8, "أيلول":9, "تشرين الأول":10, "تشرين الاول":10, "تشرين الثاني":11, "كانون الأول":12, "كانون الاول":12,
+    # فرنسي
+    "janvier":1, "janv":1, "février":2, "fevrier":2, "fev":2, "fév":2, "mars":3, "avril":4, "avr":4, "mai":5, "juin":6, "juillet":7, "juil":7, "août":8, "aout":8, "aou":8, "septembre":9, "sept":9, "octobre":10, "oct":10, "novembre":11, "nov":11, "décembre":12, "decembre":12, "dec":12,
+}
+
+# بناء regex للشهور (الأطول أولا)
+MONTH_PATTERN = "|".join(sorted([re.escape(k) for k in MONTH_MAP.keys()], key=len, reverse=True))
+
+def get_month_num(name):
+    name = name.lower().strip()
+    name = re.sub(r'[^a-z\u0600-\u06FFéèêàâîôû]+', ' ', name).strip()
+    if name in MONTH_MAP: return MONTH_MAP[name]
+    for key,val in MONTH_MAP.items():
+        if key in name or name in key:
+            return val
+    # أرقام
+    if name.isdigit():
+        n=int(name)
+        if 1<=n<=12: return n
+    return None
 
 def extract_full_dates_only(txt):
-    dates = []
+    dates=[]
+    # 1- أرقام: 04/08/2026, 04-08-2026, 04.08.2026
     for m in re.finditer(r"\b(\d{1,2})[\/\-\.]\s*(\d{1,2})[\/\-\.]\s*(20\d{2})\b", txt):
         try:
             d=int(m.group(1)); mo=int(m.group(2)); y=int(m.group(3))
             if 1<=mo<=12 and 1<=d<=31 and 2020<=y<=2030:
                 dates.append((y,mo,d))
         except: pass
+    # 2- نصي مع سنة: 04 أوت 2026, 4 Aout 2026
+    try:
+        pattern = rf"\b(\d{{1,2}})\s+({MONTH_PATTERN})\s+(20\d{{2}})\b"
+        for m in re.finditer(pattern, txt, flags=re.I):
+            try:
+                d=int(m.group(1)); mo_name=m.group(2); y=int(m.group(3))
+                mo=get_month_num(mo_name)
+                if mo and 1<=d<=31:
+                    dates.append((y,mo,d))
+            except: pass
+    except Exception as e: print(f"regex error {e}")
+    # 3- نصي بدون سنة: 04 أوت (نفترض 2026)
+    try:
+        pattern2 = rf"\b(\d{{1,2}})\s+({MONTH_PATTERN})\b"
+        for m in re.finditer(pattern2, txt, flags=re.I):
+            try:
+                d=int(m.group(1)); mo_name=m.group(2)
+                # تجنب التكرار مع اللي فيه سنة
+                if any(str(d) in txt and mo_name in txt and "2026" in txt for _ in [1]): pass
+                mo=get_month_num(mo_name)
+                if mo and 1<=d<=31:
+                    # إذا بدون سنة، نفترض 2026 إذا اليوم 2026
+                    if len(dates)==0 or not any(dd==d and mm==mo for _,mm,dd in dates):
+                        dates.append((2026,mo,d))
+            except: pass
+    except: pass
     return dates
+
+def clean_consultation_numbers(txt):
+    txt = re.sub(r"N°\s*\d+\s*/\s*20\d{2}", " ", txt, flags=re.I)
+    txt = re.sub(r"رقم\s*\d+\s*/\s*20\d{2}", " ", txt, flags=re.I)
+    return txt
 
 def is_after_august_2026_final(txt):
     cleaned = clean_consultation_numbers(txt)
@@ -83,41 +136,32 @@ def is_after_august_2026_final(txt):
         return True
     else:
         if "2026" in cleaned:
-            if any(k in cleaned.lower() for k in ["إعذار","mise en demeure","فسخ"]):
-                return False
+            if any(k in cleaned.lower() for k in ["إعذار","mise en demeure","فسخ"]): return False
             if "2025" not in cleaned and "2024" not in cleaned:
-                if any(k in cleaned.lower() for k in ["طلب العروض","طلب عروض","appel d'offres","consultation"]):
-                    return True
+                if any(k in cleaned.lower() for k in ["طلب العروض","appel d'offres","consultation"]): return True
         return False
 
-# === الجديد: وضع يومي - فقط اليوم ===
-def is_today_tender(txt):
+def is_today_tender(txt, current_header_date=None):
     today = datetime.now()
     dates = extract_full_dates_only(txt)
+    if current_header_date: dates.append(current_header_date)
     if dates:
         for y,mo,d in dates:
             if y==today.year and mo==today.month and d==today.day:
                 return True
-        # إذا فيه تاريخ لكن ليس اليوم، ارفضه (هذا يمنع جوان وجويلية)
         return False
     else:
-        # إذا لا يوجد تاريخ، نستخدم الفلتر القديم لكن مع شرط إضافي
-        # نرفض أي شيء فيه جوان/جويلية
         low = txt.lower()
-        if any(k in low for k in ["juin","juillet","جوان","جويلية","06/2026","07/2026"]):
-            return False
-        # اقبل فقط إذا فيه 2026 ويمر من الفلتر القديم
+        if any(k in low for k in ["juin","juillet","جوان","جويلية","06/2026","07/2026"]): return False
         return True
 
-def is_new_tender(txt):
+def is_new_tender(txt, current_header_date=None):
     tl = txt.lower()
     if any(k in tl for k in ["إعذار","mise en demeure","فسخ"]): return False
-    if not any(k in tl for k in ["طلب العروض","طلب عروض","appel d'offres","consultation","acquisition","fourniture","travaux"]): return False
+    if not any(k in tl for k in ["طلب العروض","طلب عروض","appel d'offres","consultation","اقتناء","إقتناء"]): return False
     if "attribution" in tl or "résultat" in tl: return False
-    # 1- الفلتر القديم الصارم (أوت 2026+)
     if not is_after_august_2026_final(txt): return False
-    # 2- الوضع اليومي (فقط اليوم)
-    if not is_today_tender(txt): return False
+    if not is_today_tender(txt, current_header_date): return False
     return True
 
 def safe_get(url, timeout=20):
@@ -144,15 +188,10 @@ def scrape_aapi():
             link_tag=el.find("a", href=True)
             link=link_tag["href"] if link_tag else url
             if link.startswith("/"): link="https://aapi.dz"+link
-            pdf_tag=el.find("a", href=lambda h: h and ".pdf" in h.lower())
-            if pdf_tag and pdf_tag.get("href"):
-                plink=pdf_tag["href"]
-                if plink.startswith("/"): plink="https://aapi.dz"+plink
-                if plink.startswith("http"): link=plink
             tid=generate_stable_id_fixed(txt, "AAPI")
             tenders.append({"id":tid,"title":txt[:600],"anep":generate_anep_deterministic(txt),"wilaya":"Alger","link":link,"source":"AAPI","company":"AAPI"})
-        print(f"📡 AAPI: {len(tenders)} (اليوم فقط)")
-    except Exception as e: print(f"AAPI error {e}")
+        print(f"📡 AAPI: {len(tenders)}")
+    except: pass
     return tenders
 
 def scrape_safqatic_fixed():
@@ -166,74 +205,54 @@ def scrape_safqatic_fixed():
             txt=el.get_text(" ",strip=True)
             if len(txt)<80 or len(txt)>2000: continue
             if not is_new_tender(txt): continue
-            pdf_inside = el.find('a', href=lambda h: h and ('/docs/offres/' in h or h.lower().endswith('.pdf')))
-            if pdf_inside and pdf_inside.get('href'):
-                link=pdf_inside['href']
-                if link.startswith("/"): link="https://www.safqatic.dz"+link
-                if not link.startswith("http"): link="https://www.safqatic.dz/"+link.lstrip('/')
-            else:
-                link_tag=el.find('a', href=True)
-                if not link_tag: continue
-                link=link_tag['href']
-                if link.startswith("/"): link="https://www.safqatic.dz"+link
-                if link.endswith("?type=1"): continue
+            link_tag=el.find('a', href=True)
+            if not link_tag: continue
+            link=link_tag['href']
+            if link.startswith("/"): link="https://www.safqatic.dz"+link
             tid=generate_stable_id_fixed(txt, "SAFQATIC")
             tenders.append({"id":tid,"title":txt[:600],"anep":generate_anep_deterministic(txt),"wilaya":"Algérie","link":link,"source":"Safqatic","company":"Algérie Télécom"})
-        print(f"📡 Safqatic: {len(tenders)} (اليوم فقط)")
-    except Exception as e: print(f"Safqatic error {e}")
+        print(f"📡 Safqatic: {len(tenders)}")
+    except: pass
     return tenders
 
 def scrape_mdn_fixed():
     tenders=[]
     try:
-        urls=["https://www.mdn.dz/site_principal/sommaire/appels/appels_ar.php","https://www.mdn.dz/site_principal/sommaire/appels/appels_fr.php"]
-        for url in urls:
-            r=safe_get(url)
-            if not r or r.status_code!=200: continue
-            soup=BeautifulSoup(r.text,"lxml")
-            count=0
-            for el in soup.find_all(['a','div','p','tr','li'], limit=300):
-                txt=el.get_text(" ",strip=True)
-                if len(txt)<30 or len(txt)>1000: continue
-                if not is_new_tender(txt): continue
-                link=url
-                if el.name=='a' and el.get('href'):
-                    link=el['href']
-                    if link.startswith("/"): link="https://www.mdn.dz"+link
-                    if not link.startswith("http"): link="https://www.mdn.dz/site_principal/sommaire/appels/"+link.lstrip('/')
-                else:
-                    a_tag=el.find('a', href=True)
-                    if a_tag and a_tag.get('href'):
-                        link=a_tag['href']
-                        if link.startswith("/"): link="https://www.mdn.dz"+link
-                        if not link.startswith("http"): link="https://www.mdn.dz/site_principal/sommaire/appels/"+link.lstrip('/')
-                tid=generate_stable_id_fixed(txt, "MDN")
-                if any(t['id']==tid for t in tenders): continue
-                tenders.append({"id":tid,"title":txt[:700],"anep":generate_anep_deterministic(txt),"wilaya":"Algérie","link":link,"source":"MDN","company":"وزارة الدفاع"})
-                count+=1
-                if count>=20: break
-            if len(tenders)>0: break
-        print(f"📡 MDN: {len(tenders)} (اليوم فقط)")
+        url="https://www.mdn.dz/site_principal/sommaire/appels/appels_ar.php"
+        r=safe_get(url)
+        if not r or r.status_code!=200: return tenders
+        soup=BeautifulSoup(r.text,"lxml")
+        current_date=None
+        for el in soup.find_all(['div','p','h3','h4','li','span'], limit=600):
+            txt=el.get_text(" ",strip=True)
+            if len(txt)<5: continue
+            # هل هذا هيدر تاريخ؟
+            if len(txt)<40:
+                dlist=extract_full_dates_only(txt)
+                if dlist:
+                    current_date=dlist[0]
+                    print(f"📅 هيدر: {txt} -> {current_date}")
+                    continue
+            if len(txt)<30 or len(txt)>1000: continue
+            if not is_new_tender(txt, current_date): continue
+            link=url
+            a_tag=el.find('a', href=True)
+            if a_tag and a_tag.get('href'):
+                link=a_tag['href']
+                if link.startswith("/"): link="https://www.mdn.dz"+link
+            tid=generate_stable_id_fixed(txt, "MDN")
+            if any(t['id']==tid for t in tenders): continue
+            tenders.append({"id":tid,"title":txt[:700],"anep":generate_anep_deterministic(txt),"wilaya":"Algérie","link":link,"source":"MDN","company":"وزارة الدفاع"})
+        print(f"📡 MDN: {len(tenders)} اليوم فقط")
     except Exception as e: print(f"MDN error {e}")
     return tenders
 
 def find_factories(all_factories, title, wilaya, limit=3):
-    tl=title.lower()
-    if any(k in tl for k in ["mobilier","meuble","bureau","informatique"]): prio="تجهيزات مكتبية"
-    elif any(k in tl for k in ["plomberie","sanitaire"]): prio="ترصيص وتدفئة"
-    elif any(k in tl for k in ["electricite","كهرباء"]): prio="كهرباء"
-    else: prio=None
-    if prio: candidates=[f for f in all_factories if prio in f.get("priority","")]
-    else: candidates=all_factories
-    same=[f for f in candidates if f.get("wilaya","").lower()==wilaya.lower()]
-    if len(same)>=limit: return random.sample(same,limit)
-    others=[f for f in candidates if f.get("wilaya","").lower()!=wilaya.lower()]
-    result=same+random.sample(others, min(limit-len(same), len(others))) if others else same
-    return result[:limit]
+    return random.sample(all_factories, min(limit, len(all_factories)))
 
 factories=load_factories()
 sent=load_sent()
-print(f"🔒 المرسلة سابقا: {len(sent)} - IDs ثابتة - وضع يومي")
+print(f"🔒 المرسلة: {len(sent)} - اليوم {datetime.now().strftime('%d/%m/%Y')}")
 
 all_tenders=[]
 all_tenders.extend(scrape_aapi())
@@ -241,7 +260,6 @@ all_tenders.extend(scrape_safqatic_fixed())
 all_tenders.extend(scrape_mdn_fixed())
 
 print(f"📊 الخام اليوم: {len(all_tenders)}")
-
 unique={}
 for t in all_tenders:
     if t["id"] in sent: continue
@@ -252,28 +270,20 @@ new_tenders=list(unique.values())
 print(f"🔍 جديدة اليوم: {len(new_tenders)}")
 
 if not new_tenders:
-    print("✅ لا يوجد مناقصات جديدة اليوم - سيجلب غدا تلقائيا")
+    print("✅ لا يوجد جديدة اليوم")
 else:
-    sent_count=0
     for t in new_tenders[:15]:
         matched=find_factories(factories, t["title"], t["wilaya"], limit=3)
-        factories_text=""
-        for i,f in enumerate(matched,1):
-            factories_text+=f"{i}. 🏭 <b>{f['name']}</b> 📦 {f['product']} 📞 {f['phone']}\n"
-        msg=f"""🔔 <b>مناقصة اليوم {datetime.now().strftime('%d/%m/%Y')} - {t['source']}</b> 🔔
+        factories_text="".join([f"{i}. 🏭 <b>{f['name']}</b>\n" for i,f in enumerate(matched,1)])
+        msg=f"""🔔 <b>مناقصة {datetime.now().strftime('%d/%m/%Y')} - {t['source']}</b> 🔔
 
-🏢 <b>{t['company']}</b>
-📍 {t['wilaya']} | ANEP: {t['anep']}
+🏢 {t['company']}
 📋 {t['title']}
 
 📄 <a href="{t['link']}">فتح الإعلان</a>
 
-🏭 <b>أقرب 3 مصانع:</b>
 {factories_text}
-#Tradium #Daily
+#Tradium #v88
 """
-        if send(msg):
-            sent.add(t["id"])
-            sent_count+=1
+        if send(msg): sent.add(t["id"])
     save_sent(sent)
-    print(f"✅ أرسلت {sent_count} اليوم فقط ولن تكرر")
