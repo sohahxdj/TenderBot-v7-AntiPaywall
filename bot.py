@@ -12,7 +12,7 @@ FACTORIES_FILE = "factories_300.json"
 ALGIERS = ZoneInfo("Africa/Algiers")
 TODAY = datetime.now(ALGIERS)
 
-print(f"🚀 v15.3 FINAL - {TODAY.strftime('%d/%m/%Y')}")
+print(f"🚀 v15.4 FINAL - يجيب الطويلة - {TODAY.strftime('%d/%m/%Y')}")
 
 def load_factories():
     try:
@@ -32,8 +32,6 @@ def load_sent():
 def save_sent(s):
     with open(SENT_FILE,"w",encoding="utf-8") as f:
         json.dump({"ids": list(s),"last_update": TODAY.isoformat(),"count": len(s)}, f, ensure_ascii=False, indent=2)
-    with open("sent_ids_backup.txt","w",encoding="utf-8") as f:
-        f.write("\n".join(s))
 
 def send(text):
     url=f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -83,39 +81,42 @@ def scrape():
     r=safe_get(url)
     if not r: return [], None
     all_dates=extract_dates(r.text)
-    print(f"📅 تواريخ 02-{TODAY.day} أوت: {all_dates}")
-    if not all_dates:
-        return [], None
+    print(f"📅 تواريخ: {all_dates}")
+    if not all_dates: return [], None
     latest=max(all_dates, key=lambda x: (x[0],x[1],x[2]))
     print(f"📅 آخر تاريخ: {latest[3]}")
 
     soup=BeautifulSoup(r.text,"lxml")
     cur=None
     seen=set()
-    for el in soup.find_all(['div','p','li','td','tr'], limit=1000):
+    all_p = soup.find_all(['div','p','li','td','tr'], limit=1500)
+    cnt_tender=0
+    for el in all_p:
         txt=el.get_text(" ",strip=True)
         if len(txt)<10: continue
-        if len(txt)<45:
+        # هيدر تاريخ حتى لو طوله 100
+        if len(txt)<100:
             d=extract_dates(txt)
             if d: cur=d[0]; continue
-        if len(txt)<40 or len(txt)>2500: continue
+        if len(txt)<40 or len(txt)>4000: continue
         if "طلب العروض" not in txt: continue
-        if not re.search(r"\d{2,4}\s*/\s*2026", txt): continue
-        if not cur: continue
-        if cur[0]!=latest[0] or cur[1]!=latest[1] or cur[2]!=latest[2]: continue
-        if txt[:80] in seen: continue
-        seen.add(txt[:80])
+        cnt_tender+=1
+        if not re.search(r"\d{1,4}\s*/\s*2026", txt): continue
+        if not cur:
+            # لو ما لقيناش هيدر، استخدم آخر تاريخ
+            cur=latest
+        if txt[:100] in seen: continue
+        seen.add(txt[:100])
         link=url
-        pdf=None
         for a in el.find_all('a', href=True):
             href=a['href']
             if ".pdf" in href.lower():
-                pdf=href
-                if href.startswith("/"): pdf="https://www.mdn.dz"+href
-                elif not href.startswith("http"): pdf="https://www.mdn.dz/site_principal/sommaire/appels/"+href.lstrip('/')
+                if href.startswith("/"): href="https://www.mdn.dz"+href
+                elif not href.startswith("http"): href="https://www.mdn.dz/site_principal/sommaire/appels/"+href.lstrip('/')
+                link=href
                 break
-        if pdf: link=pdf
-        tenders.append({"id":gen_id(txt,"MDN"),"title":txt,"anep":gen_anep(txt),"link":link,"date":f"{cur[2]:02d}/{cur[1]:02d}/{cur[0]}","company":"وزارة الدفاع"})
+        tenders.append({"id":gen_id(txt,"MDN"),"title":txt,"anep":gen_anep(txt),"link":link,"date":f"{cur[2]:02d}/{cur[1]:02d}/{cur[0]}"})
+    print(f"📡 وجد {cnt_tender} فقرة فيها طلب العروض، بعد الفلترة: {len(tenders)}")
     print(f"📡 مناقصات {latest[3]} فقط: {len(tenders)}")
     return tenders, latest
 
@@ -127,12 +128,12 @@ new=[t for t in tenders if t["id"] not in sent]
 print(f"🔍 جديدة: {len(new)}")
 
 if not new:
-    print(f"✅ اليوم {TODAY.strftime('%d/%m/%Y')} - لا يوجد جديد - وهذا صحيح لأن 05 أوت غير موجود")
+    print(f"✅ اليوم {TODAY.strftime('%d/%m/%Y')} - لا يوجد جديد")
 else:
     for t in new[:5]:
         picks=random.sample(factories, min(3, len(factories))) if factories else []
-        fac_txt="".join([f"{i}. 🏭 <b>{html.escape(f.get('name',''))}</b> 📞 <code>{f.get('phone','')}</code>\n" for i,f in enumerate(picks,1)])
-        msg=f"""🔔 <b>مناقصة {t['date']}</b>\n\n🏢 {t['company']} | ANEP: {t['anep']}\n📋 {html.escape(t['title'][:650])}\n\n📄 <a href="{t['link']}">📎 الإعلان + PDF</a>\n\n🏭 <b>3 موردين:</b>\n{fac_txt}"""
+        fac_txt="".join([f"{i}. 🏭 <b>{html.escape(f.get('name',''))}</b> 📞 <code>{f.get('phone','')}</code> 🗺️ <a href=\"{f.get('map','')}\">موقع</a>\n" for i,f in enumerate(picks,1)])
+        msg=f"""🔔 <b>مناقصة {t['date']} - وزارة الدفاع</b>\n\nANEP: {t['anep']}\n📋 {html.escape(t['title'][:700])}\n\n📄 <a href="{t['link']}">📎 الإعلان الأصلي + PDF</a>\n\n🏭 <b>3 موردين:</b>\n{fac_txt}"""
         if send(msg):
             sent.add(t["id"])
             save_sent(sent)
