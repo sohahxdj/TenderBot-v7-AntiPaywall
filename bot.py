@@ -13,7 +13,46 @@ FACTORIES_FILE = "factories_300.json"
 ALGIERS = ZoneInfo("Africa/Algiers")
 TODAY = datetime.now(ALGIERS)
 
-print(f"🚀 v17 FINAL FIXED - {TODAY.strftime('%d/%m/%Y')}")
+print(f"🚀 v17 NEAREST + MAP - {TODAY.strftime('%d/%m/%Y')}")
+
+WILAYAS = ["الجزائر","وهران","قسنطينة","عنابة","البليدة","سطيف","باتنة","بسكرة","بشار","تندوف","تمنراست","ورقلة","جانت","تلمسان","تيزي وزو","بجاية","جيجل","سكيكدة","الطارف","سوق أهراس","تبسة","خنشلة","أم البواقي","قالمة","ميلة","برج بوعريريج","البويرة","بومرداس","تيبازة","عين الدفلى","المدية","الجلفة","المسيلة","تيارت","تيسمسيلت","الأغواط","غرداية","الوادي","المغير","أولاد جلال","الشلف","مستغانم","معسكر","سعيدة","سيدي بلعباس","عين تموشنت","غليزان","أدرار","برج البحري","المرادية","خميستي","شرشال","عين الصفراء","النعامة","بني عباس"]
+
+def extract_location_from_tender(txt):
+    m = re.search(r"بولاية\s+([^\s،؛.]+)", txt)
+    if m: return m.group(1)
+    m = re.search(r"ولاية\s+([^\s،؛.]+)", txt)
+    if m: return m.group(1)
+    m = re.search(r"على مستوى\s+([^\s،؛.()]+)", txt)
+    if m: return m.group(1).split()[0]
+    m = re.search(r"ب([^\s]+)\/ن ع", txt)
+    if m: return m.group(1)
+    for w in WILAYAS:
+        if w in txt:
+            return w
+    return None
+
+def get_factory_location(f):
+    return " ".join([str(f.get(k,"")) for k in ["wilaya","city","address","name"]]).lower()
+
+def choose_nearest_factories(tender_title, factories, n=3):
+    if not factories:
+        return []
+    loc = extract_location_from_tender(tender_title)
+    if not loc:
+        return random.sample(factories, min(n, len(factories)))
+    scored = []
+    loc_low = loc.lower()
+    for f in factories:
+        f_loc = get_factory_location(f)
+        score = 0 if loc_low in f_loc or any(part in f_loc for part in loc_low.split()) else 1
+        scored.append((score, f))
+    scored.sort(key=lambda x: x[0])
+    nearest = [f for s,f in scored if s==0]
+    if len(nearest) < n:
+        rest = [f for s,f in scored if s==1]
+        random.shuffle(rest)
+        nearest += rest
+    return nearest[:n]
 
 def load_factories():
     try:
@@ -24,8 +63,7 @@ def load_sent():
     try:
         if os.path.exists(SENT_FILE):
             with open(SENT_FILE,"r",encoding="utf-8") as f:
-                data=json.load(f)
-                return set(data.get("ids",[]))
+                return set(json.load(f).get("ids",[]))
     except: pass
     return set()
 
@@ -97,8 +135,7 @@ def scrape():
         link="https://www.mdn.dz/site_principal/sommaire/appels/appels_ar.php"
         for a in el.find_all('a', href=True):
             if ".pdf" in a['href'].lower():
-                href=a['href']
-                link=urljoin("https://www.mdn.dz", href)
+                link=urljoin("https://www.mdn.dz", a['href'])
                 break
         tenders.append({"id":gen_id(txt,"MDN"),"title":txt,"anep":gen_anep(txt),"link":link,"date":f"{cur[2]:02d}/{cur[1]:02d}/{cur[0]}"})
     print(f"📡 مناقصات {latest[3]} فقط: {len(tenders)}")
@@ -106,20 +143,25 @@ def scrape():
 
 factories=load_factories()
 sent=load_sent()
-print(f"🔒 مرسلة سابقا: {len(sent)}")
+print(f"🔒 مرسلة سابقا: {len(sent)} - مصانع {len(factories)}")
 tenders,_=scrape()
 new=[t for t in tenders if t["id"] not in sent][:10]
 print(f"🔍 جديدة: {len(new)}")
 if not os.path.exists(SENT_FILE): save_sent(sent)
+
 for t in new:
-    picks=random.sample(factories, min(3,len(factories))) if factories else []
+    nearest = choose_nearest_factories(t['title'], factories, 3)
     fac=""
-    for i,f in enumerate(picks,1):
+    loc = extract_location_from_tender(t['title']) or "الجزائر"
+    for i,f in enumerate(nearest,1):
         name=html.escape(f.get('name','')[:45])
         phone=f.get('phone') or f.get('tel') or ""
-        murl=f.get('map') or f.get('maps') or f.get('location') or f"https://www.google.com/maps/search/{name}"
-        fac+=f"{i}. 🏭 <b>{name}</b> 📞 <code>{phone}</code> | <a href='{murl}'>🗺️ خريطة</a>\n"
-    msg=f"🔔 <b>{t['date']}</b>\n{t['title'][:600]}\n<a href='{t['link']}'>📎 رابط الإعلان الأصلي / PDF</a>\n\n{fac}"
-    if send(msg): sent.add(t["id"])
+        murl=f.get('map') or f.get('maps') or f.get('location') or f"https://www.google.com/maps/search/{name}+{loc}"
+        fac+=f"{i}. 🏭 <b>{name}</b> ({loc})\n📞 <code>{phone}</code> | <a href='{murl}'>🗺️ خريطة الموقع</a>\n"
+    msg=f"🔔 <b>{t['date']} - {loc}</b>\n{t['title'][:600]}\n<a href='{t['link']}'>📎 رابط الإعلان الأصلي / PDF</a>\n\n{fac}🔖 {t['anep']}"
+    if send(msg):
+        sent.add(t["id"])
+        print(f"✅ {t['anep']} -> {loc}")
+
 save_sent(sent)
 print(f"🏁 محفوظ {len(sent)}")
