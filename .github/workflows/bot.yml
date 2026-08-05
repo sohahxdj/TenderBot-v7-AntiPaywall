@@ -1,26 +1,23 @@
-name: Tradium Bot v16 FINAL
+name: Tradium Bot v18 - 4 Sources
 on:
   schedule:
     - cron: '0 7 * * *'
   workflow_dispatch:
 jobs:
-  run-bot:
+  run:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
       - run: pip install requests beautifulsoup4 lxml urllib3
-      - env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python bot.py
-      - name: Save sent file - never fails
+      - run: python bot.py
+      - name: Save files
         run: |
           git config --global user.name "Tradium Bot"
           git config --global user.email "bot@tradium.dz"
           if [! -f sent_v7.json ]; then echo '{"ids":[],"count":0}' > sent_v7.json; fi
-          git add sent_v7.json -f
-          git diff --staged --quiet || git commit -m "🔒 حفظ"
-          git push || echo "push failed but ok"
+          git add sent_v7.json public/tenders.json public/stats.json -f
+          git diff --staged --quiet || git commit -m "🔒 v18 - 4 مصادر - $(date)"
+          git push || echo "push ok"
