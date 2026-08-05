@@ -12,7 +12,7 @@ FACTORIES_FILE = "factories_300.json"
 ALGIERS = ZoneInfo("Africa/Algiers")
 TODAY = datetime.now(ALGIERS)
 
-print(f"🚀 v20 - MDN (02-05 أوت) + MARCHES - {TODAY.strftime('%d/%m/%Y %H:%M')}")
+print(f"🚀 v20.1 - MDN + /trends - {TODAY.strftime('%d/%m/%Y %H:%M')}")
 
 def load_factories():
     try:
@@ -44,10 +44,10 @@ def extract_dates(txt):
         if mo==8 and 2<=d<=TODAY.day: dates.append((2026,mo,d,m.group(0)))
     return dates
 def safe_get(url, timeout=12):
-    headers={"User-Agent":"Mozilla/5.0 Chrome/120.0"}
+    headers={"User-Agent":"Mozilla/5.0 Chrome/120.0","Referer":"https://marches-publics.gov.dz/"}
     try:
         r=requests.get(url, headers=headers, timeout=timeout, verify=False)
-        if len(r.text)>1500: return r
+        if len(r.text)>800: return r
     except: pass
     return None
 
@@ -58,7 +58,7 @@ def scrape_mdn():
     print(f"[MDN] {r.status_code} - {len(r.text)}")
     all_dates=extract_dates(r.text)
     if not all_dates:
-        print("[MDN] لا يوجد 02-05 أوت اليوم")
+        print("[MDN] لا يوجد 02-05 أوت")
         return []
     uniq=sorted(set(all_dates), key=lambda x: x[2], reverse=True)
     print(f"[MDN] تواريخ: {[x[3] for x in uniq]}")
@@ -88,28 +88,53 @@ def scrape_mdn():
             return tenders
     return []
 
-def scrape_marches():
-    # محاولة سريعة 8 ثواني فقط، إذا فشل نكمل
-    urls=["https://marches-publics.gov.dz","https://www.mfdgi.gov.dz"]
+def scrape_trends():
+    # الرابط الجديد اللي عطيته
+    urls=[
+        "https://marches-publics.gov.dz/trends",
+        "https://www.marches-publics.gov.dz/trends",
+        "https://marches-publics.gov.dz/api/trends",
+        "https://marches-publics.gov.dz/api/avis"
+    ]
     for url in urls:
-        print(f"[MARCHES] {url}")
-        r=safe_get(url, timeout=8)
-        if not r: continue
-        print(f"[MARCHES] {len(r.text)} حرف")
-        soup=BeautifulSoup(r.text,"html.parser")
+        print(f"[TRENDS] محاولة {url}")
+        r=safe_get(url, timeout=10)
+        if not r:
+            print(f"[TRENDS] فشل {url}")
+            continue
+        print(f"[TRENDS] {url} => {len(r.text)} حرف")
         tenders=[]; seen=set()
-        for el in soup.find_all(['a','div'], limit=400):
+        # إذا JSON
+        try:
+            data=r.json()
+            if isinstance(data, list):
+                for item in data[:20]:
+                    txt=item.get("title") or item.get("objet") or str(item)[:600]
+                    link=item.get("url") or item.get("link") or url
+                    if txt[:80] in seen: continue
+                    seen.add(txt[:80])
+                    tenders.append({"id":gen_id(txt,"TRENDS"),"title":txt[:600],"anep":gen_anep(txt),"link":link,"date":TODAY.strftime("%d/%m/%Y"),"source":"MARCHES-PUBLICS"})
+                if tenders: return tenders
+        except: pass
+        # إذا HTML
+        soup=BeautifulSoup(r.text,"html.parser")
+        for el in soup.find_all(['div','a','article','li'], limit=600):
             txt=el.get_text(" ",strip=True)
-            if len(txt)<40: continue
-            if "Appel" not in txt and "Marché" not in txt and "مناقصة" not in txt: continue
+            if len(txt)<40 or len(txt)>2000: continue
+            if not any(k in txt for k in ["Appel","Avis","مناقصة","Marché","Consultation"]): continue
             if txt[:80] in seen: continue
             seen.add(txt[:80])
-            tenders.append({"id":gen_id(txt,"MARCHES"),"title":txt[:600],"anep":gen_anep(txt),"link":url,"date":TODAY.strftime("%d/%m/%Y"),"source":"MARCHES-PUBLICS"})
-            if len(tenders)>=5: break
+            link=url
+            if el.name=='a' and el.get('href'):
+                href=el['href']
+                if href.startswith("http"): link=href
+                elif href.startswith("/"): link="https://marches-publics.gov.dz"+href
+            tenders.append({"id":gen_id(txt,"TRENDS"),"title":txt[:600],"anep":gen_anep(txt),"link":link,"date":TODAY.strftime("%d/%m/%Y"),"source":"MARCHES-PUBLICS"})
+            if len(tenders)>=10: break
         if tenders:
-            print(f"[MARCHES] نجح {len(tenders)}")
+            print(f"[TRENDS] نجح {len(tenders)} من {url}")
             return tenders
-    print("[MARCHES] محجوب - نكمل بـ MDN فقط")
+    print("[TRENDS] 0 - البوابة تحتاج تسجيل دخول")
     return []
 
 factories=load_factories()
@@ -118,7 +143,7 @@ print(f"🔒 مرسلة سابقا: {len(sent)}")
 
 all_t=[]
 all_t.extend(scrape_mdn())
-all_t.extend(scrape_marches())
+all_t.extend(scrape_trends())
 
 print(f"📊 الإجمالي: {len(all_t)}")
 new=[t for t in all_t if t["id"] not in sent][:10]
@@ -128,10 +153,10 @@ for t in new:
     picks=random.sample(factories, min(3,len(factories))) if factories else []
     fac="".join([f"{i}. 🏭 <b>{html.escape(f['name'])}</b> 📞 <code>{f['phone']}</code> <a href=\"{f.get('map','#')}\">🗺️ موقع</a>\n" for i,f in enumerate(picks,1)])
     emoji="🛡️" if t["source"]=="MDN" else "🏛️"
-    msg=f"{emoji} <b>[{t['source']}] {t['date']}</b>\n{t['title'][:600]}\n<a href='{t['link']}'>📎 فتح PDF</a>\n\n{fac}📍 المصدر: {t['source']}"
+    msg=f"{emoji} <b>[{t['source']}] {t['date']}</b>\n{t['title'][:600]}\n<a href='{t['link']}'>📎 فتح الإعلان</a>\n\n{fac}📍 المصدر: {t['source']}"
     if send(msg):
         sent.add(t["id"])
-        print(f"✅ أرسل {t['anep']}")
+        print(f"✅ {t['anep']}")
 
 save_sent(sent)
 os.makedirs("public", exist_ok=True)
