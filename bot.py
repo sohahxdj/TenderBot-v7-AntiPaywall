@@ -12,7 +12,7 @@ FACTORIES_FILE = "factories_300.json"
 ALGIERS = ZoneInfo("Africa/Algiers")
 TODAY = datetime.now(ALGIERS)
 
-print(f"🚀 v15.2 FINAL - {TODAY.strftime('%d/%m/%Y')}")
+print(f"🚀 v15.3 FINAL - {TODAY.strftime('%d/%m/%Y')}")
 
 def load_factories():
     try:
@@ -42,18 +42,15 @@ def send(text):
         r=requests.post(url,data=data,timeout=30)
         print(f"Telegram {r.status_code}")
         return r.status_code==200
-    except Exception as e:
-        print(f"Telegram err {e}")
-        return False
+    except: return False
 
 def gen_id(t,s):
     clean = re.sub(r'\s+', ' ', t[:200].lower().strip())[:120]
     return hashlib.md5(f"{clean}|{s}".encode()).hexdigest()
 
-def gen_anep(t):
-    return f"26{abs(hash(t))%900000+100000}"
+def gen_anep(t): return f"26{abs(hash(t))%900000+100000}"
 
-MONTH_MAP={"جانفي":1,"فيفري":2,"مارس":3,"أفريل":4,"افريل":4,"ماي":5,"جوان":6,"جويلية":7,"جويليه":7,"أوت":8,"اوت":8,"سبتمبر":9,"أكتوبر":10,"اكتوبر":10,"نوفمبر":11,"ديسمبر":12}
+MONTH_MAP={"جانفي":1,"فيفري":2,"مارس":3,"أفريل":4,"افريل":4,"ماي":5,"جوان":6,"جويلية":7,"أوت":8,"اوت":8,"سبتمبر":9,"أكتوبر":10,"اكتوبر":10,"نوفمبر":11,"ديسمبر":12}
 MONTH_PAT="|".join(sorted([re.escape(k) for k in MONTH_MAP], key=len, reverse=True))
 
 def get_mo(n):
@@ -68,11 +65,7 @@ def extract_dates(txt):
         mo=get_mo(m.group(2))
         if not mo: continue
         y=int(m.group(3)); d=int(m.group(1))
-        # فلتر صارم: من 02/08/2026 إلى اليوم فقط - تجاهل 2027 والمستقبل
-        if y!=2026: continue
-        if mo!=8: continue
-        if d<2: continue
-        if d>TODAY.day: continue
+        if y!=2026 or mo!=8 or d<2 or d>TODAY.day: continue
         dates.append((y,mo,d, m.group(0)))
     return dates
 
@@ -90,30 +83,28 @@ def scrape():
     r=safe_get(url)
     if not r: return [], None
     all_dates=extract_dates(r.text)
-    print(f"📅 تواريخ صالحة 02-{TODAY.day} أوت: {all_dates}")
+    print(f"📅 تواريخ 02-{TODAY.day} أوت: {all_dates}")
     if not all_dates:
-        print(f"📅 لا يوجد تاريخ بين 02 و {TODAY.day} أوت - 05 أوت غير موجود وهذا صحيح")
         return [], None
     latest=max(all_dates, key=lambda x: (x[0],x[1],x[2]))
-    print(f"📅 آخر تاريخ حقيقي: {latest[3]}")
+    print(f"📅 آخر تاريخ: {latest[3]}")
 
     soup=BeautifulSoup(r.text,"lxml")
     cur=None
     seen=set()
-    for el in soup.find_all(['div','p','li'], limit=800):
+    for el in soup.find_all(['div','p','li','td','tr'], limit=1000):
         txt=el.get_text(" ",strip=True)
         if len(txt)<10: continue
-        if len(txt)<40:
+        if len(txt)<45:
             d=extract_dates(txt)
             if d: cur=d[0]; continue
-        if len(txt)<50 or len(txt)>800: continue
+        if len(txt)<40 or len(txt)>2500: continue
         if "طلب العروض" not in txt: continue
         if not re.search(r"\d{2,4}\s*/\s*2026", txt): continue
-        if "2024" in txt or "2025" in txt: continue
         if not cur: continue
         if cur[0]!=latest[0] or cur[1]!=latest[1] or cur[2]!=latest[2]: continue
-        if txt[:70] in seen: continue
-        seen.add(txt[:70])
+        if txt[:80] in seen: continue
+        seen.add(txt[:80])
         link=url
         pdf=None
         for a in el.find_all('a', href=True):
@@ -124,12 +115,6 @@ def scrape():
                 elif not href.startswith("http"): pdf="https://www.mdn.dz/site_principal/sommaire/appels/"+href.lstrip('/')
                 break
         if pdf: link=pdf
-        else:
-            a=el.find('a', href=True)
-            if a and a.get('href'):
-                href=a['href']
-                if href.startswith("/"): href="https://www.mdn.dz"+href
-                link=href
         tenders.append({"id":gen_id(txt,"MDN"),"title":txt,"anep":gen_anep(txt),"link":link,"date":f"{cur[2]:02d}/{cur[1]:02d}/{cur[0]}","company":"وزارة الدفاع"})
     print(f"📡 مناقصات {latest[3]} فقط: {len(tenders)}")
     return tenders, latest
@@ -137,22 +122,18 @@ def scrape():
 factories=load_factories()
 sent=load_sent()
 print(f"🔒 مرسلة سابقا: {len(sent)}")
-
 tenders, latest = scrape()
 new=[t for t in tenders if t["id"] not in sent]
-print(f"🔍 جديدة من آخر تاريخ: {len(new)}")
+print(f"🔍 جديدة: {len(new)}")
 
 if not new:
-    print(f"✅ اليوم {TODAY.strftime('%d/%m/%Y')} - لا يوجد مناقصات جديدة - البوت يعمل صحيح مثل v14")
+    print(f"✅ اليوم {TODAY.strftime('%d/%m/%Y')} - لا يوجد جديد - وهذا صحيح لأن 05 أوت غير موجود")
 else:
-    for t in new[:10]:
+    for t in new[:5]:
         picks=random.sample(factories, min(3, len(factories))) if factories else []
-        fac_txt=""
-        for i,f in enumerate(picks,1):
-            fac_txt+=f"{i}. 🏭 <b>{html.escape(f.get('name',''))}</b>\n📦 {html.escape(f.get('product',''))}\n📞 <code>{f.get('phone','')}</code> | 🗺️ <a href=\"{f.get('map','')}\">موقع</a>\n"
-        msg=f"""🔔 <b>مناقصة {t['date']} - MDN</b> 🔔\n\n🏢 {html.escape(t['company'])} | ANEP: {t['anep']}\n📋 {html.escape(t['title'][:650])}\n\n📄 <a href="{t['link']}">📎 الإعلان الأصلي + PDF</a>\n\n🏭 <b>3 موردين:</b>\n{fac_txt}\n#Tradium #v15_2"""
+        fac_txt="".join([f"{i}. 🏭 <b>{html.escape(f.get('name',''))}</b> 📞 <code>{f.get('phone','')}</code>\n" for i,f in enumerate(picks,1)])
+        msg=f"""🔔 <b>مناقصة {t['date']}</b>\n\n🏢 {t['company']} | ANEP: {t['anep']}\n📋 {html.escape(t['title'][:650])}\n\n📄 <a href="{t['link']}">📎 الإعلان + PDF</a>\n\n🏭 <b>3 موردين:</b>\n{fac_txt}"""
         if send(msg):
             sent.add(t["id"])
             save_sent(sent)
-
 print(f"🏁 محفوظ {len(sent)}")
