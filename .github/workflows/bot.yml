@@ -1,4 +1,4 @@
-name: Tradium Bot v16 FINAL
+name: Tradium Bot v17 FINAL FIXED
 on:
   schedule:
     - cron: '0 7 * * *'
@@ -22,5 +22,5 @@ jobs:
           git config --global user.email "bot@tradium.dz"
           if [! -f sent_v7.json ]; then echo '{"ids":[],"count":0}' > sent_v7.json; fi
           git add sent_v7.json -f
-          git diff --staged --quiet || git commit -m "🔒 حفظ"
+          git diff --staged --quiet || git commit -m "🔒 حفظ $(date)"
           git push || echo "push failed but ok"
