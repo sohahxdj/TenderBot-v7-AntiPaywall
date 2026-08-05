@@ -1,4 +1,4 @@
-name: Tradium Bot v18 - 4 Sources
+name: Tradium v19 - MDN + MARCHES BY ANY MEANS
 on:
   schedule:
     - cron: '0 7 * * *'
@@ -11,13 +11,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install requests beautifulsoup4 lxml urllib3
+      - run: pip install requests beautifulsoup4 lxml cloudscraper urllib3
       - run: python bot.py
-      - name: Save files
+      - name: Save
         run: |
           git config --global user.name "Tradium Bot"
           git config --global user.email "bot@tradium.dz"
           if [! -f sent_v7.json ]; then echo '{"ids":[],"count":0}' > sent_v7.json; fi
-          git add sent_v7.json public/tenders.json public/stats.json -f
-          git diff --staged --quiet || git commit -m "🔒 v18 - 4 مصادر - $(date)"
-          git push || echo "push ok"
+          git add sent_v7.json public/tenders.json -f
+          git diff --staged --quiet || git commit -m "🔒 v19 - MDN + MARCHES - $(date)"
+          git push
