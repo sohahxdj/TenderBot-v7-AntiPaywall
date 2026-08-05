@@ -12,7 +12,7 @@ FACTORIES_FILE = "factories_300.json"
 ALGIERS = ZoneInfo("Africa/Algiers")
 TODAY = datetime.now(ALGIERS)
 
-print(f"🚀 v15.4 FINAL - يجيب الطويلة - {TODAY.strftime('%d/%m/%Y')}")
+print(f"🚀 v16 FINAL ULTRA - {TODAY.strftime('%d/%m/%Y %H:%M')}")
 
 def load_factories():
     try:
@@ -30,8 +30,10 @@ def load_sent():
     return set()
 
 def save_sent(s):
+    # ينشئ الملف حتى لو فارغ - حل مشكل git 128
     with open(SENT_FILE,"w",encoding="utf-8") as f:
         json.dump({"ids": list(s),"last_update": TODAY.isoformat(),"count": len(s)}, f, ensure_ascii=False, indent=2)
+    print(f"💾 تم حفظ {len(s)} في {SENT_FILE}")
 
 def send(text):
     url=f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -40,7 +42,9 @@ def send(text):
         r=requests.post(url,data=data,timeout=30)
         print(f"Telegram {r.status_code}")
         return r.status_code==200
-    except: return False
+    except Exception as e:
+        print(f"Telegram err {e}")
+        return False
 
 def gen_id(t,s):
     clean = re.sub(r'\s+', ' ', t[:200].lower().strip())[:120]
@@ -63,48 +67,53 @@ def extract_dates(txt):
         mo=get_mo(m.group(2))
         if not mo: continue
         y=int(m.group(3)); d=int(m.group(1))
-        if y!=2026 or mo!=8 or d<2 or d>TODAY.day: continue
+        if y!=2026 or mo!=8 or d<2: continue
+        if d>TODAY.day: continue
         dates.append((y,mo,d, m.group(0)))
     return dates
 
 def safe_get(url):
-    headers={"User-Agent":"Mozilla/5.0 Chrome/120.0.0","Referer":"https://www.mdn.dz/"}
-    try:
-        r=requests.get(url, headers=headers, timeout=30, verify=False)
-        print(f"HTTP {r.status_code} - {len(r.text)} حرف")
-        return r
-    except: return None
+    uas=["Mozilla/5.0 Chrome/120.0.0","Mozilla/5.0 Firefox/120.0","Mozilla/5.0 Windows NT 10.0"]
+    for attempt in range(3):
+        try:
+            headers={"User-Agent": random.choice(uas),"Referer":"https://www.mdn.dz/","Accept-Language":"ar-DZ"}
+            r=requests.get(url, headers=headers, timeout=30, verify=False)
+            print(f"HTTP {r.status_code} - {len(r.text)} حرف - محاولة {attempt+1}")
+            if len(r.text)>10000: return r
+        except Exception as e:
+            print(f"محاولة {attempt+1} فشلت: {e}")
+    return None
 
 def scrape():
-    tenders=[]
     url="https://www.mdn.dz/site_principal/sommaire/appels/appels_ar.php"
     r=safe_get(url)
-    if not r: return [], None
+    if not r:
+        print("❌ فشل جلب الموقع بعد 3 محاولات")
+        return [], None
     all_dates=extract_dates(r.text)
-    print(f"📅 تواريخ: {all_dates}")
-    if not all_dates: return [], None
+    print(f"📅 تواريخ 02-{TODAY.day} أوت: {all_dates}")
+    if not all_dates:
+        print("📅 لا يوجد تاريخ في المجال - ربما الموقع فارغ اليوم")
+        return [], None
     latest=max(all_dates, key=lambda x: (x[0],x[1],x[2]))
-    print(f"📅 آخر تاريخ: {latest[3]}")
+    print(f"📅 آخر تاريخ حقيقي: {latest[3]}")
 
     soup=BeautifulSoup(r.text,"lxml")
     cur=None
     seen=set()
-    all_p = soup.find_all(['div','p','li','td','tr'], limit=1500)
-    cnt_tender=0
-    for el in all_p:
+    tenders=[]
+    cnt=0
+    for el in soup.find_all(['div','p','li','td','tr'], limit=1500):
         txt=el.get_text(" ",strip=True)
         if len(txt)<10: continue
-        # هيدر تاريخ حتى لو طوله 100
-        if len(txt)<100:
+        if len(txt)<120:
             d=extract_dates(txt)
             if d: cur=d[0]; continue
-        if len(txt)<40 or len(txt)>4000: continue
+        if len(txt)<40 or len(txt)>5000: continue
         if "طلب العروض" not in txt: continue
-        cnt_tender+=1
+        cnt+=1
         if not re.search(r"\d{1,4}\s*/\s*2026", txt): continue
-        if not cur:
-            # لو ما لقيناش هيدر، استخدم آخر تاريخ
-            cur=latest
+        if not cur: cur=latest
         if txt[:100] in seen: continue
         seen.add(txt[:100])
         link=url
@@ -116,25 +125,33 @@ def scrape():
                 link=href
                 break
         tenders.append({"id":gen_id(txt,"MDN"),"title":txt,"anep":gen_anep(txt),"link":link,"date":f"{cur[2]:02d}/{cur[1]:02d}/{cur[0]}"})
-    print(f"📡 وجد {cnt_tender} فقرة فيها طلب العروض، بعد الفلترة: {len(tenders)}")
-    print(f"📡 مناقصات {latest[3]} فقط: {len(tenders)}")
+    print(f"📡 فقرات فيها طلب العروض: {cnt} -> بعد الفلترة {len(tenders)}")
     return tenders, latest
 
+# --- Main ---
 factories=load_factories()
 sent=load_sent()
 print(f"🔒 مرسلة سابقا: {len(sent)}")
+
 tenders, latest = scrape()
+if tenders is None: tenders=[]
+
 new=[t for t in tenders if t["id"] not in sent]
 print(f"🔍 جديدة: {len(new)}")
 
+# حتى لو 0، ننشئ الملف باش git ما يفشلش
+if not os.path.exists(SENT_FILE):
+    save_sent(sent)
+
 if not new:
-    print(f"✅ اليوم {TODAY.strftime('%d/%m/%Y')} - لا يوجد جديد")
+    print(f"✅ اليوم {TODAY.strftime('%d/%m/%Y')} - لا يوجد جديد (صحيح لأن 05 أوت غير موجود)")
 else:
-    for t in new[:5]:
+    for t in new[:10]:
         picks=random.sample(factories, min(3, len(factories))) if factories else []
-        fac_txt="".join([f"{i}. 🏭 <b>{html.escape(f.get('name',''))}</b> 📞 <code>{f.get('phone','')}</code> 🗺️ <a href=\"{f.get('map','')}\">موقع</a>\n" for i,f in enumerate(picks,1)])
-        msg=f"""🔔 <b>مناقصة {t['date']} - وزارة الدفاع</b>\n\nANEP: {t['anep']}\n📋 {html.escape(t['title'][:700])}\n\n📄 <a href="{t['link']}">📎 الإعلان الأصلي + PDF</a>\n\n🏭 <b>3 موردين:</b>\n{fac_txt}"""
+        fac_txt="".join([f"{i}. 🏭 <b>{html.escape(f.get('name',''))}</b> 📞 <code>{f.get('phone','')}</code>\n" for i,f in enumerate(picks,1)])
+        msg=f"""🔔 <b>مناقصة {t['date']}</b>\n\nANEP: {t['anep']}\n📋 {html.escape(t['title'][:700])}\n\n📄 <a href="{t['link']}">📎 الإعلان + PDF الأصلي</a>\n\n🏭 <b>3 موردين:</b>\n{fac_txt}"""
         if send(msg):
             sent.add(t["id"])
-            save_sent(sent)
+    save_sent(sent)
+
 print(f"🏁 محفوظ {len(sent)}")
