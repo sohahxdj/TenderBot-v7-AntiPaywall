@@ -2,6 +2,7 @@ import os, requests, json, re, hashlib, random, urllib3, html
 from bs4 import BeautifulSoup
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from urllib.parse import urljoin
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -12,7 +13,7 @@ FACTORIES_FILE = "factories_300.json"
 ALGIERS = ZoneInfo("Africa/Algiers")
 TODAY = datetime.now(ALGIERS)
 
-print(f"🚀 v17 FINAL - {TODAY.strftime('%d/%m/%Y')}")
+print(f"🚀 v17 FINAL FIXED - {TODAY.strftime('%d/%m/%Y')}")
 
 def load_factories():
     try:
@@ -97,7 +98,7 @@ def scrape():
         for a in el.find_all('a', href=True):
             if ".pdf" in a['href'].lower():
                 href=a['href']
-                link="https://www.mdn.dz"+href if href.startswith("/") else href
+                link=urljoin("https://www.mdn.dz", href)
                 break
         tenders.append({"id":gen_id(txt,"MDN"),"title":txt,"anep":gen_anep(txt),"link":link,"date":f"{cur[2]:02d}/{cur[1]:02d}/{cur[0]}"})
     print(f"📡 مناقصات {latest[3]} فقط: {len(tenders)}")
@@ -112,8 +113,13 @@ print(f"🔍 جديدة: {len(new)}")
 if not os.path.exists(SENT_FILE): save_sent(sent)
 for t in new:
     picks=random.sample(factories, min(3,len(factories))) if factories else []
-    fac="".join([f"{i}. 🏭 <b>{html.escape(f['name'])}</b> 📞 <code>{f['phone']}</code>\n" for i,f in enumerate(picks,1)])
-    msg=f"🔔 <b>{t['date']}</b>\n{t['title'][:600]}\n<a href='{t['link']}'>📎 PDF</a>\n\n{fac}"
+    fac=""
+    for i,f in enumerate(picks,1):
+        name=html.escape(f.get('name','')[:45])
+        phone=f.get('phone') or f.get('tel') or ""
+        murl=f.get('map') or f.get('maps') or f.get('location') or f"https://www.google.com/maps/search/{name}"
+        fac+=f"{i}. 🏭 <b>{name}</b> 📞 <code>{phone}</code> | <a href='{murl}'>🗺️ خريطة</a>\n"
+    msg=f"🔔 <b>{t['date']}</b>\n{t['title'][:600]}\n<a href='{t['link']}'>📎 رابط الإعلان الأصلي / PDF</a>\n\n{fac}"
     if send(msg): sent.add(t["id"])
 save_sent(sent)
 print(f"🏁 محفوظ {len(sent)}")
