@@ -11,6 +11,13 @@ SENT_FILE="sent_v7.json"
 FACTORIES_FILE="factories_300.json"
 TODAY=datetime.now(ZoneInfo("Africa/Algiers"))
 
+# فلتر القطاعات للثاني فقط
+SECTEURS_INTERET = [
+    "btp","batiment","construction","travaux","amenagement","rehabilitation",
+    "industrie","industriel","fourniture","equipement","outillage","acquisition",
+    "energie","electrique","maintenance","pieces","rechange","sonatrach","sonelgaz"
+]
+
 def load_factories():
     try:
         with open(FACTORIES_FILE,"r",encoding="utf-8") as f: return json.load(f)
@@ -32,79 +39,65 @@ def gen_id(t,src): return hashlib.md5(f"{t[:150]}|{src}".encode()).hexdigest()
 def gen_anep(t): return f"26{abs(hash(t))%900000+100000}"
 def safe_get(url):
     try:
-        r=requests.get(url,headers={"User-Agent":"Mozilla/5.0 Chrome/120.0"},timeout=15,verify=False)
-        if len(r.text)>400: return r
+        r=requests.get(url,headers={"User-Agent":"Mozilla/5.0 Chrome/120.0"},timeout=20,verify=False)
+        if len(r.text)>500: return r
     except: pass
     return None
+def match_secteur(title):
+    tl=title.lower()
+    return any(k in tl for k in SECTEURS_INTERET)
 
+# 1- MDN بدون فلتر - يجيب كلشي
 def scrape_mdn():
     base="https://www.mdn.dz"
-    url=f"{base}/site_principal/sommaire/appels/appels_ar.php"
+    url="https://www.mdn.dz/site_principal/sommaire/appels/appels_ar.php"
     r=safe_get(url)
     if not r: return []
     soup=BeautifulSoup(r.text,"html.parser")
     res=[]; seen=set()
-    for el in soup.find_all(['div','p','li','td'],limit=1000):
+    for el in soup.find_all(['div','p','li','td'],limit=1200):
         txt=el.get_text(" ",strip=True)
-        if len(txt)<25 or "طلب العروض" not in txt or not re.search(r"\d+/\d{4}",txt): continue
+        if len(txt)<25 or "طلب العروض" not in txt: continue
         if txt[:100] in seen: continue
         seen.add(txt[:100])
         link=url
         for a in el.find_all('a',href=True):
             if ".pdf" in a['href'].lower():
                 link=urljoin(base,a['href']); break
+        if link==url and el.parent:
+            for a in el.parent.find_all('a',href=True):
+                if ".pdf" in a['href'].lower():
+                    link=urljoin(base,a['href']); break
         res.append({"id":gen_id(txt,"MDN"),"title":txt[:800],"anep":gen_anep(txt),"link":link,"date":TODAY.strftime("%d/%m/%Y"),"source":"MDN"})
-    return res[:5]
+    print(f"[MDN] {len(res)} بدون فلتر")
+    return res[:10]
 
+# 2- RHINO مع فلتر 4 قطاعات فقط
 def scrape_rhino():
     base="https://rhinotenders.com"
-    r=safe_get(base+"/")
+    url="https://rhinotenders.com/tenders?tender_type=National"
+    r=safe_get(url)
     if not r: return []
     soup=BeautifulSoup(r.text,"html.parser")
     res=[]; seen=set()
-    for h in soup.find_all(['h3','h2'],limit=50):
-        txt=h.get_text(" ",strip=True)
-        if len(txt)<15 or len(txt)>350 or txt in seen: continue
-        if "Ne ratez" in txt: continue
-        seen.add(txt)
-        link=base+"/"
-        pa=h.find_parent('a',href=True)
-        if pa: link=urljoin(base,pa['href'])
-        res.append({"id":gen_id(txt,"RHINO"),"title":txt,"anep":gen_anep(txt),"link":link,"date":TODAY.strftime("%d/%m/%Y"),"source":"RHINO"})
-    return res[:7]
-
-def scrape_bomop():
-    base="https://bomop.anep.dz"
-    # هذه الفئات فيها كل القطاعات
-    cats=["/category/industrie/","/category/batiment-et-travaux-publics/","/category/energie/","/category/equipements-industriels-outillage-et-pieces-detachees/","/category/agriculture-elevage-forets-et-peche/"]
-    res=[]; seen=set()
-    for cat in cats:
-        url=base+cat
-        r=safe_get(url)
-        if not r: continue
-        soup=BeautifulSoup(r.text,"html.parser")
-        # BOMOP كل إعلان في article
-        for art in soup.find_all('article',limit=15):
-            h=art.find(['h2','h3'])
-            if not h: continue
-            txt=h.get_text(" ",strip=True)
-            if len(txt)<20 or txt[:80] in seen: continue
-            if "appel" not in txt.lower() and "avis" not in txt.lower(): continue
-            seen.add(txt[:80])
-            a=art.find('a',href=True)
-            link=urljoin(base,a['href']) if a else url
-            res.append({"id":gen_id(txt,"BOMOP"),"title":txt[:800],"anep":gen_anep(txt),"link":link,"date":TODAY.strftime("%d/%m/%Y"),"source":"BOMOP"})
-        if len(res)>=10: break
-    print(f"[BOMOP] {len(res)} ب رابط أصلي")
+    for a in soup.find_all('a',href=True,limit=250):
+        href=a['href']
+        if "/tenders/" not in href and "appel" not in href.lower(): continue
+        txt=a.get_text(" ",strip=True)
+        if len(txt)<15 or len(txt)>400: continue
+        if txt[:80] in seen: continue
+        if not match_secteur(txt): continue
+        seen.add(txt[:80])
+        full_link=urljoin(base,href)
+        res.append({"id":gen_id(txt,"RHINO"),"title":txt[:800],"anep":gen_anep(txt),"link":full_link,"date":TODAY.strftime("%d/%m/%Y"),"source":"RHINO"})
+    print(f"[RHINO] {len(res)} بعد فلتر 4 قطاعات")
     return res[:10]
 
-# تشغيل
 factories=load_factories()
 sent=load_sent()
 all_t=[]
 all_t.extend(scrape_mdn())
 all_t.extend(scrape_rhino())
-all_t.extend(scrape_bomop())
 print(f"Total {len(all_t)}")
 new=[t for t in all_t if t["id"] not in sent][:10]
 for t in new:
@@ -114,10 +107,8 @@ for t in new:
         name=html.escape(f.get('name','')[:45])
         phone=f.get('phone') or f.get('tel') or ""
         murl=f.get('map') or f.get('maps') or f.get('location') or f"https://www.google.com/maps/search/{name}"
-        fac+=f"{i}. 🏭 <b>{name}</b>\n📞 <code>{phone}</code> | <a href='{murl}'>🗺️ موقع الخريطة</a>\n"
-    emoji="🏛️" if t["source"]=="BOMOP" else "🛡️" if t["source"]=="MDN" else "🏗️"
-    # رابط أصلي + PDF
-    msg=f"{emoji} <b>[{t['source']}] {t['date']}</b>\n{t['title'][:700]}\n\n📎 <a href='{t['link']}'>رابط الإعلان الأصلي / PDF</a>\n\n{fac}\n🔖 {t['anep']}"
+        fac+=f"{i}. 🏭 <b>{name}</b>\n📞 <code>{phone}</code> | <a href='{murl}'>🗺️ خريطة الموقع</a>\n"
+    msg=f"🏗️ <b>[{t['source']}] {t['date']}</b>\n{t['title'][:700]}\n\n📎 <a href='{t['link']}'>رابط الإعلان الأصلي / PDF</a>\n\n{fac}\n🔖 {t['anep']}"
     if send(msg): sent.add(t["id"])
 save_sent(sent)
 os.makedirs("public",exist_ok=True)
