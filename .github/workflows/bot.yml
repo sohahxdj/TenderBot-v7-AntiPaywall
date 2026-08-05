@@ -1,28 +1,46 @@
-name: Tradium v22
+name: Tradium v18 - MDN 2-5 Aout 8h
+
 on:
   schedule:
     - cron: '0 7 * * *'
   workflow_dispatch:
+
 jobs:
   run:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install
-        run: pip install requests beautifulsoup4 lxml urllib3
-      - name: Run
+
+      - name: Install dependencies
+        run: |
+          pip install requests beautifulsoup4 lxml urllib3
+
+      - name: Run bot
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python bot.py
-      - name: Save
         run: |
-          git config --global user.name "Bot"
-          git config --global user.email "bot@bot.dz"
-          if [ ! -f sent_v7.json ]; then echo '{"ids":[]}' > sent_v7.json; fi
+          python bot.py
+
+      - name: Save sent file
+        run: |
+          git config --global user.name "Tradium Bot"
+          git config --global user.email "bot@tradium.dz"
+          if [ ! -f sent_v7.json ]; then
+            echo '{"ids":[],"count":0}' > sent_v7.json
+          fi
+          if [ ! -d public ]; then
+            mkdir -p public
+          fi
+          if [ ! -f public/tenders.json ]; then
+            echo '[]' > public/tenders.json
+          fi
           git add sent_v7.json public/tenders.json -f || true
-          git commit -m "update" || true
-          git push || true
+          git diff --staged --quiet || git commit -m "🤖 v18 update $(date +'%d/%m/%Y %H:%M')"
+          git push || echo "Nothing to push"
