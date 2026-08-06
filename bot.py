@@ -30,7 +30,6 @@ def load_sent():
     return set()
 
 def save_sent(s):
-    # ينشئ الملف حتى لو فارغ - حل مشكل git 128
     with open(SENT_FILE,"w",encoding="utf-8") as f:
         json.dump({"ids": list(s),"last_update": TODAY.isoformat(),"count": len(s)}, f, ensure_ascii=False, indent=2)
     print(f"💾 تم حفظ {len(s)} في {SENT_FILE}")
@@ -54,6 +53,38 @@ def gen_anep(t): return f"26{abs(hash(t))%900000+100000}"
 
 MONTH_MAP={"جانفي":1,"فيفري":2,"مارس":3,"أفريل":4,"افريل":4,"ماي":5,"جوان":6,"جويلية":7,"أوت":8,"اوت":8,"سبتمبر":9,"أكتوبر":10,"اكتوبر":10,"نوفمبر":11,"ديسمبر":12}
 MONTH_PAT="|".join(sorted([re.escape(k) for k in MONTH_MAP], key=len, reverse=True))
+
+# --- تعديل بسيط فقط للموردين - أقرب مكان ---
+WILAYAS = ["الجزائر","المرادية","خميستي","جيجل","شرشال","وهران","قسنطينة","بشار","تندوف","ورقلة","بومرداس","تيبازة","البويرة","البليدة","بجاية","سكيكدة","عنابة","سطيف","باتنة","تلمسان"]
+
+def extract_location(txt):
+    m = re.search(r"بولاية\s+([^\s،؛.]+)", txt)
+    if m: return m.group(1)
+    m = re.search(r"على مستوى\s+([^\s،؛./]+)", txt)
+    if m: return m.group(1).split()[0]
+    m = re.search(r"الوحدة الواقعة ب([^\s،.]+)", txt)
+    if m: return m.group(1)
+    for w in WILAYAS:
+        if w in txt:
+            return w
+    return "الجزائر"
+
+def choose_nearest(title, factories, n=3):
+    if not factories: return []
+    loc = extract_location(title).lower()
+    scored=[]
+    for f in factories:
+        f_txt = " ".join([str(f.get(k,"")) for k in ["wilaya","city","address","name"]]).lower()
+        score = 0 if loc in f_txt else 1
+        scored.append((score,f))
+    scored.sort(key=lambda x: x[0])
+    nearest=[f for s,f in scored if s==0][:n]
+    if len(nearest)<n:
+        rest=[f for s,f in scored if s==1]
+        random.shuffle(rest)
+        nearest+=rest[:n-len(nearest)]
+    return nearest[:n]
+# --- نهاية التعديل ---
 
 def get_mo(n):
     n=n.lower()
@@ -139,17 +170,27 @@ if tenders is None: tenders=[]
 new=[t for t in tenders if t["id"] not in sent]
 print(f"🔍 جديدة: {len(new)}")
 
-# حتى لو 0، ننشئ الملف باش git ما يفشلش
 if not os.path.exists(SENT_FILE):
     save_sent(sent)
 
 if not new:
-    print(f"✅ اليوم {TODAY.strftime('%d/%m/%Y')} - لا يوجد جديد (صحيح لأن 05 أوت غير موجود)")
+    print(f"✅ اليوم {TODAY.strftime('%d/%m/%Y')} - لا يوجد جديد")
 else:
     for t in new[:10]:
-        picks=random.sample(factories, min(3, len(factories))) if factories else []
-        fac_txt="".join([f"{i}. 🏭 <b>{html.escape(f.get('name',''))}</b> 📞 <code>{f.get('phone','')}</code>\n" for i,f in enumerate(picks,1)])
-        msg=f"""🔔 <b>مناقصة {t['date']}</b>\n\nANEP: {t['anep']}\n📋 {html.escape(t['title'][:700])}\n\n📄 <a href="{t['link']}">📎 الإعلان + PDF الأصلي</a>\n\n🏭 <b>3 موردين:</b>\n{fac_txt}"""
+        # تعديل الموردين فقط - أقرب + خريطة + تصحيح الأرقام
+        nearest = choose_nearest(t['title'], factories, 3)
+        loc = extract_location(t['title'])
+        fac_txt=""
+        for i,f in enumerate(nearest,1):
+            name = html.escape(f.get('name','')[:45])
+            phone_raw = str(f.get('phone','')).strip()
+            # تصحيح الأرقام المعكوسة بسبب RTL
+            phone = phone_raw[::-1] if phone_raw and phone_raw[0] in "0123456789" and " " not in phone_raw else phone_raw
+            # إضافة LRM باش الرقم ما يتقلبش
+            phone = f"\u200E{phone_raw}\u200E"
+            murl = f.get('map') or f.get('maps') or f.get('location') or f"https://www.google.com/maps/search/{name}+{loc}"
+            fac_txt += f"{i}. 🏭 <b>{name}</b> ({loc}) 📞 <code>{phone}</code> | <a href='{murl}'>🗺️ خريطة الموقع</a>\n"
+        msg=f"""🔔 <b>مناقصة {t['date']} - {loc}</b>\n\nANEP: {t['anep']}\n📋 {html.escape(t['title'][:700])}\n\n📄 <a href="{t['link']}">📎 الإعلان + PDF الأصلي</a>\n\n🏭 <b>أقرب 3 موردين:</b>\n{fac_txt}"""
         if send(msg):
             sent.add(t["id"])
     save_sent(sent)
